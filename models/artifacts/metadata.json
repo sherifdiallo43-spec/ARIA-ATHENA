@@ -1,0 +1,51 @@
+{
+  "feature_names": [
+    "acwr",
+    "charge_chronique",
+    "fc_repos_estimee",
+    "sommeil_h",
+    "age",
+    "imc",
+    "historique_blessures",
+    "deficit_calorique_pct",
+    "lactate",
+    "intensite_moyenne_7j"
+  ],
+  "feature_importances": [
+    0.1131,
+    0.0128,
+    0.0209,
+    0.4638,
+    0.0084,
+    0.0145,
+    0.155,
+    0.0867,
+    0.016,
+    0.1089
+  ],
+  "metrics": {
+    "injury_model_auc": 0.6663,
+    "fatigue_model_mae": 0.6479,
+    "brier_score_avant_calibration": 0.2204,
+    "brier_score_apres_calibration": 0.2203
+  },
+  "n_train_samples": 6400,
+  "model_type": "GradientBoosting (scikit-learn, sample_weight='balanced')",
+  "hyperparametres": {
+    "injury_risk_model": {
+      "learning_rate": 0.0246,
+      "max_depth": 2,
+      "min_samples_leaf": 36,
+      "n_estimators": 330,
+      "subsample": 0.8426
+    },
+    "fatigue_model": {
+      "learning_rate": 0.0697,
+      "max_depth": 2,
+      "min_samples_leaf": 19,
+      "n_estimators": 164,
+      "subsample": 0.7047
+    },
+    "recherche": "RandomizedSearchCV, 5-fold, 25 tirages"
+  }
+}

@@ -1,0 +1,122 @@
+{
+  "reference_scientifique": "Leckey C, van Dyk N, Doherty C, Lawlor A, Delahunt E. « Machine learning approaches to injury risk prediction in sport: a scoping review with evidence synthesis ». Br J Sports Med. 2025;59(7):491-500. doi:10.1136/bjsports-2024-108576.",
+  "research_question": "Un modèle Gradient Boosting apporte-t-il un gain mesurable par rapport à une régression logistique (baseline) et une forêt aléatoire, pour prédire le risque de blessure et le niveau de fatigue à partir de features physiologiques et de charge d'entraînement ?",
+  "hypothese_h1": "Les modèles non-linéaires à ensemble d'arbres (Gradient Boosting, Random Forest) prédisent mieux le risque de blessure sportive que les modèles linéaires (Logistic Regression), mesuré par le ROC-AUC.",
+  "hypothese_h0": "Aucune différence significative de ROC-AUC entre les familles de modèles sur ce dataset.",
+  "test_hypothese": {
+    "n_tirages_valides": 1000,
+    "proportion_gb_superieur": 0.907,
+    "diff_auc_moyenne": 0.0187,
+    "ic95_diff_auc": [
+      -0.0093,
+      0.049
+    ]
+  },
+  "validation_croisee_5fold": [
+    {
+      "modele": "Logistic Regression (baseline)",
+      "roc_auc_moyen": 0.6734,
+      "roc_auc_ecart_type": 0.0182,
+      "f1_moyen": 0.4088,
+      "f1_ecart_type": 0.0132
+    },
+    {
+      "modele": "Random Forest",
+      "roc_auc_moyen": 0.6872,
+      "roc_auc_ecart_type": 0.0105,
+      "f1_moyen": 0.4233,
+      "f1_ecart_type": 0.0104
+    },
+    {
+      "modele": "Gradient Boosting (retenu en production)",
+      "roc_auc_moyen": 0.6748,
+      "roc_auc_ecart_type": 0.0143,
+      "f1_moyen": 0.4093,
+      "f1_ecart_type": 0.011
+    }
+  ],
+  "seuil_optimise": {
+    "seuil_optimal": 0.5323,
+    "accuracy": 0.7258,
+    "precision": 0.3811,
+    "recall": 0.498,
+    "f1": 0.4318
+  },
+  "conditions_experimentales": {
+    "n_echantillons": 6000,
+    "n_train": 4800,
+    "n_test": 1200,
+    "features": [
+      "acwr",
+      "charge_chronique",
+      "fc_repos_estimee",
+      "sommeil_h",
+      "age",
+      "imc",
+      "historique_blessures",
+      "deficit_calorique_pct",
+      "lactate",
+      "intensite_moyenne_7j"
+    ],
+    "random_state": 42,
+    "split": "80/20",
+    "ponderation": "balanced (class_weight / sample_weight) sur les 3 modèles"
+  },
+  "classification_injury_risk": [
+    {
+      "modele": "Logistic Regression (baseline)",
+      "accuracy": 0.63,
+      "precision": 0.3035,
+      "recall": 0.5936,
+      "f1": 0.4016,
+      "roc_auc": 0.6714
+    },
+    {
+      "modele": "Random Forest",
+      "accuracy": 0.6858,
+      "precision": 0.3486,
+      "recall": 0.5777,
+      "f1": 0.4348,
+      "roc_auc": 0.6992
+    },
+    {
+      "modele": "Gradient Boosting (retenu en production)",
+      "accuracy": 0.6875,
+      "precision": 0.3377,
+      "recall": 0.5139,
+      "f1": 0.4076,
+      "roc_auc": 0.6899
+    }
+  ],
+  "regression_fatigue": [
+    {
+      "modele": "Linear Regression (baseline)",
+      "mae": 0.7765,
+      "rmse": 0.9771,
+      "r2": 0.5033
+    },
+    {
+      "modele": "Random Forest",
+      "mae": 0.6533,
+      "rmse": 0.8187,
+      "r2": 0.6513
+    },
+    {
+      "modele": "Gradient Boosting (retenu en production)",
+      "mae": 0.6436,
+      "rmse": 0.8115,
+      "r2": 0.6574
+    }
+  ],
+  "figures": {
+    "roc_curves": "C:\\Users\\DELL\\Documents\\pythonprojet\\athena\\reports\\artifacts_figures\\roc_curves.png",
+    "confusion_matrix": "C:\\Users\\DELL\\Documents\\pythonprojet\\athena\\reports\\artifacts_figures\\confusion_matrix.png",
+    "feature_importance": "C:\\Users\\DELL\\Documents\\pythonprojet\\athena\\reports\\artifacts_figures\\feature_importance.png"
+  },
+  "conclusion": {
+    "meilleur_modele_classification": "Random Forest",
+    "roc_auc_meilleur": 0.6992,
+    "meilleur_modele_regression": "Gradient Boosting (retenu en production)",
+    "mae_meilleur": 0.6436
+  }
+}
