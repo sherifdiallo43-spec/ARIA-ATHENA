@@ -61,7 +61,23 @@ MOUVEMENTS_REFERENCE = {
 def _telecharger_modele_si_absent():
     if MODEL_PATH.exists():
         return
-    urllib.request.urlretrieve(MODEL_URL, str(MODEL_PATH))
+    # Téléchargement vers un fichier temporaire puis renommage : une coupure
+    # réseau ne laisse jamais un modèle tronqué (qui serait vu comme "présent").
+    ARTIFACTS_DIR.mkdir(exist_ok=True)
+    tmp = MODEL_PATH.with_suffix(".part")
+    try:
+        urllib.request.urlretrieve(MODEL_URL, str(tmp))
+        tmp.replace(MODEL_PATH)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+
+
+def telecharger_modele() -> Path:
+    """Télécharge le modèle PoseLandmarker si absent (appelable depuis le dashboard)."""
+    _telecharger_modele_si_absent()
+    _charger_detecteur.cache_clear()
+    return MODEL_PATH
 
 
 @lru_cache(maxsize=1)

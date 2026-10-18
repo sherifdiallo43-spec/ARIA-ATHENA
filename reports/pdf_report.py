@@ -13,6 +13,7 @@ from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, Image, PageBreak
 )
 from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.utils import ImageReader
 
 TEAL = colors.HexColor("#0B7A6B")
 TEAL_DARK = colors.HexColor("#062E2A")
@@ -39,7 +40,8 @@ def _styles():
 
 def generer_rapport_pdf(chemin_sortie: str, athlete: dict, profil_risque: dict,
                          acwr_info: dict, performance: dict, recommandations: list,
-                         alertes: list, etude_scientifique: dict | None = None) -> str:
+                         alertes: list, etude_scientifique: dict | None = None,
+                         explication: list | None = None, plan_action: dict | None = None) -> str:
     """
     Génère le rapport PDF complet ("Generate AI Report") et l'enregistre au
     chemin indiqué. Si `etude_scientifique` est fourni (voir
@@ -55,7 +57,7 @@ def generer_rapport_pdf(chemin_sortie: str, athlete: dict, profil_risque: dict,
     elements = []
 
     # --- En-tête ---
-    elements.append(Paragraph("⚡ ARiA TECH — ATHÉNA", styles["AthenaTitre"]))
+    elements.append(Paragraph("ARiA TECH — ATHÉNA", styles["AthenaTitre"]))
     elements.append(Paragraph(
         f"Rapport IA de performance & santé — {athlete.get('nom', 'Athlète')} · "
         f"Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')} · PARC 2026, Ligue Intelligence Artificielle",
@@ -114,6 +116,34 @@ def generer_rapport_pdf(chemin_sortie: str, athlete: dict, profil_risque: dict,
         elements.append(table_facteurs)
         elements.append(Spacer(1, 12))
 
+    # --- Explication individuelle + plan d'action chiffré ---
+    if explication:
+        elements.append(Paragraph("Pourquoi ce score ? — Contributions individuelles", styles["AthenaSection"]))
+        data_ex = [["Facteur", "Valeur", "Contribution au risque"]] + [
+            [e["facteur"], f"{e['valeur']}", f"{e['contribution_pts']:+.1f} pts"] for e in explication
+        ]
+        t_ex = Table(data_ex, colWidths=[85 * mm, 30 * mm, 50 * mm])
+        t_ex.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), TEAL_DARK), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"), ("FONTSIZE", (0, 0), (-1, -1), 9),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#CCCCCC")),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F2F7F6")]),
+        ]))
+        elements.append(t_ex)
+        elements.append(Spacer(1, 10))
+    if plan_action and plan_action.get("leviers"):
+        elements.append(Paragraph("Plan d'action chiffré", styles["AthenaSection"]))
+        for lv in plan_action["leviers"]:
+            elements.append(Paragraph(
+                f"<b>{lv['action']}</b> ({lv['de']} -&gt; {lv['vers']}) : -{lv['gain_pts']} pts de risque",
+                styles["AthenaCorps"]))
+            elements.append(Spacer(1, 3))
+        pc = plan_action["plan_combine"]
+        elements.append(Paragraph(
+            f"<b>Plan combiné :</b> risque {pc['avant_pct']} % -&gt; {pc['apres_pct']} % (-{pc['gain_pts']} pts).",
+            styles["AthenaCorps"]))
+        elements.append(Spacer(1, 12))
+
     # --- Alertes détectées ---
     elements.append(Paragraph("Risques et alertes détectés", styles["AthenaSection"]))
     for niveau, titre, detail in alertes[:6]:
@@ -147,13 +177,13 @@ def generer_rapport_pdf(chemin_sortie: str, athlete: dict, profil_risque: dict,
     # --- Étude scientifique (Research Question / Hypothèse / Results / Figures) ---
     if etude_scientifique:
         elements.append(PageBreak())
-        elements.append(Paragraph("⚡ ARiA TECH — ATHÉNA", styles["AthenaTitre"]))
+        elements.append(Paragraph("ARiA TECH — ATHÉNA", styles["AthenaTitre"]))
         elements.append(Paragraph("Annexe — Étude scientifique comparative", styles["AthenaSousTitre"]))
         elements.append(HRFlowable(width="100%", color=TEAL, thickness=1.2))
         elements.append(Spacer(1, 10))
 
         elements.append(Paragraph("Référence scientifique", styles["AthenaSection"]))
-        elements.append(Paragraph(etude_scientifique["reference_scientifique"], styles["AthenaCorps"]))
+        elements.append(Paragraph(etude_scientifique.get("reference_scientifique", ""), styles["AthenaCorps"]))
         elements.append(Spacer(1, 8))
 
         elements.append(Paragraph("Research Question", styles["AthenaSection"]))
@@ -220,7 +250,7 @@ def generer_rapport_pdf(chemin_sortie: str, athlete: dict, profil_risque: dict,
         if seuil:
             elements.append(Paragraph(
                 f"Seuil de décision optimisé (F1-max) pour Gradient Boosting : {seuil['seuil_optimal']:.3f} "
-                f"→ Accuracy={seuil['accuracy']:.3f}, Precision={seuil['precision']:.3f}, "
+                f": Accuracy={seuil['accuracy']:.3f}, Precision={seuil['precision']:.3f}, "
                 f"Recall={seuil['recall']:.3f}, F1={seuil['f1']:.3f}.",
                 styles["AthenaCorps"],
             ))
@@ -230,7 +260,9 @@ def generer_rapport_pdf(chemin_sortie: str, athlete: dict, profil_risque: dict,
         for cle, largeur in [("roc_curves", 90), ("confusion_matrix", 70), ("feature_importance", 90)]:
             chemin_img = chemins_figures.get(cle)
             if chemin_img and Path(chemin_img).exists():
-                elements.append(Image(chemin_img, width=largeur * mm, height=largeur * 0.78 * mm))
+                # Hauteur calculée depuis les dimensions réelles : pas de déformation.
+                w_px, h_px = ImageReader(chemin_img).getSize()
+                elements.append(Image(chemin_img, width=largeur * mm, height=largeur * mm * h_px / w_px))
                 elements.append(Spacer(1, 8))
 
         elements.append(Paragraph("Discussion", styles["AthenaSection"]))

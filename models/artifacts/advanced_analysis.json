@@ -1,0 +1,377 @@
+{
+  "importance_permutation": [
+    {
+      "feature": "sommeil_h",
+      "label": "Heures de sommeil",
+      "baisse_auc_moyenne": 0.0749,
+      "ecart_type": 0.0081,
+      "importance_native": 0.2345
+    },
+    {
+      "feature": "historique_blessures",
+      "label": "Historique de blessures",
+      "baisse_auc_moyenne": 0.0499,
+      "ecart_type": 0.0086,
+      "importance_native": 0.1574
+    },
+    {
+      "feature": "acwr",
+      "label": "Ratio charge aiguë/chronique (ACWR)",
+      "baisse_auc_moyenne": 0.0281,
+      "ecart_type": 0.0044,
+      "importance_native": 0.1213
+    },
+    {
+      "feature": "deficit_calorique_pct",
+      "label": "Écart calorique vs TDEE",
+      "baisse_auc_moyenne": 0.0073,
+      "ecart_type": 0.0043,
+      "importance_native": 0.0922
+    },
+    {
+      "feature": "intensite_moyenne_7j",
+      "label": "Intensité d'effort (7 derniers jours)",
+      "baisse_auc_moyenne": 0.0068,
+      "ecart_type": 0.0049,
+      "importance_native": 0.1028
+    },
+    {
+      "feature": "fc_repos_estimee",
+      "label": "Fréquence cardiaque de repos",
+      "baisse_auc_moyenne": 0.0062,
+      "ecart_type": 0.0031,
+      "importance_native": 0.06
+    },
+    {
+      "feature": "imc",
+      "label": "IMC",
+      "baisse_auc_moyenne": -0.0014,
+      "ecart_type": 0.0032,
+      "importance_native": 0.0766
+    },
+    {
+      "feature": "age",
+      "label": "Âge",
+      "baisse_auc_moyenne": -0.0019,
+      "ecart_type": 0.003,
+      "importance_native": 0.0289
+    },
+    {
+      "feature": "charge_chronique",
+      "label": "Charge chronique (28j)",
+      "baisse_auc_moyenne": -0.0024,
+      "ecart_type": 0.0027,
+      "importance_native": 0.0596
+    },
+    {
+      "feature": "lactate",
+      "label": "Taux de lactate",
+      "baisse_auc_moyenne": -0.0041,
+      "ecart_type": 0.0049,
+      "importance_native": 0.0666
+    }
+  ],
+  "courbe_apprentissage": [
+    {
+      "n_train": 480,
+      "auc_moyen": 0.594,
+      "ecart_type": 0.0255
+    },
+    {
+      "n_train": 1200,
+      "auc_moyen": 0.624,
+      "ecart_type": 0.0183
+    },
+    {
+      "n_train": 2400,
+      "auc_moyen": 0.663,
+      "ecart_type": 0.0103
+    },
+    {
+      "n_train": 3600,
+      "auc_moyen": 0.6766,
+      "ecart_type": 0.0102
+    },
+    {
+      "n_train": 4800,
+      "auc_moyen": 0.6761,
+      "ecart_type": 0.0114
+    }
+  ],
+  "robustesse": {
+    "bruit": [
+      {
+        "niveau_sigma": 0.0,
+        "auc_moyen": 0.6898,
+        "ecart_type": 0.0
+      },
+      {
+        "niveau_sigma": 0.1,
+        "auc_moyen": 0.6904,
+        "ecart_type": 0.0047
+      },
+      {
+        "niveau_sigma": 0.25,
+        "auc_moyen": 0.6852,
+        "ecart_type": 0.0119
+      },
+      {
+        "niveau_sigma": 0.5,
+        "auc_moyen": 0.6512,
+        "ecart_type": 0.0107
+      },
+      {
+        "niveau_sigma": 1.0,
+        "auc_moyen": 0.5937,
+        "ecart_type": 0.0205
+      }
+    ],
+    "manquants": [
+      {
+        "taux_manquant": 0.0,
+        "gb_imputation_milieu": 0.6898,
+        "production_imputation_milieu": 0.7085,
+        "hgb_natif_nan": 0.686
+      },
+      {
+        "taux_manquant": 0.1,
+        "gb_imputation_milieu": 0.6493,
+        "production_imputation_milieu": 0.6927,
+        "hgb_natif_nan": 0.6821
+      },
+      {
+        "taux_manquant": 0.2,
+        "gb_imputation_milieu": 0.6124,
+        "production_imputation_milieu": 0.6727,
+        "hgb_natif_nan": 0.6658
+      },
+      {
+        "taux_manquant": 0.3,
+        "gb_imputation_milieu": 0.5896,
+        "production_imputation_milieu": 0.6622,
+        "hgb_natif_nan": 0.6517
+      },
+      {
+        "taux_manquant": 0.5,
+        "gb_imputation_milieu": 0.5646,
+        "production_imputation_milieu": 0.6315,
+        "hgb_natif_nan": 0.6311
+      }
+    ]
+  },
+  "test_donnees_inedites": {
+    "graine": 123,
+    "n": 3000,
+    "taux_positifs": 0.204,
+    "Gradient Boosting (production)": {
+      "roc_auc": 0.684,
+      "recall": 0.5229,
+      "precision": 0.3422,
+      "f1": 0.4137
+    },
+    "HistGradientBoosting": {
+      "roc_auc": 0.6673,
+      "recall": 0.4771,
+      "precision": 0.3415,
+      "f1": 0.3981
+    }
+  },
+  "calibration_production": {
+    "frequence_reelle_blessure": 0.204,
+    "score_moyen_production": 0.458,
+    "prob_moyenne_apres_correction_prevalence": 0.209,
+    "brier_score_brut": 0.211,
+    "brier_apres_correction_prevalence": 0.1436,
+    "brier_reference_constante": 0.1624,
+    "fiabilite_par_classe": [
+      {
+        "intervalle_score": "0.00-0.20",
+        "n": 138,
+        "score_moyen": 0.156,
+        "frequence_observee": 0.087,
+        "prob_corrigee_moyenne": 0.048
+      },
+      {
+        "intervalle_score": "0.20-0.35",
+        "n": 609,
+        "score_moyen": 0.289,
+        "frequence_observee": 0.079,
+        "prob_corrigee_moyenne": 0.1
+      },
+      {
+        "intervalle_score": "0.35-0.50",
+        "n": 1198,
+        "score_moyen": 0.418,
+        "frequence_observee": 0.158,
+        "prob_corrigee_moyenne": 0.164
+      },
+      {
+        "intervalle_score": "0.50-0.65",
+        "n": 674,
+        "score_moyen": 0.574,
+        "frequence_observee": 0.248,
+        "prob_corrigee_moyenne": 0.27
+      },
+      {
+        "intervalle_score": "0.65-1.00",
+        "n": 381,
+        "score_moyen": 0.76,
+        "frequence_observee": 0.514,
+        "prob_corrigee_moyenne": 0.477
+      }
+    ]
+  },
+  "analyse_erreurs": {
+    "n_faux_negatifs": 122,
+    "n_vrais_positifs": 129,
+    "part_blessures_manquees": 0.486,
+    "profil": [
+      {
+        "feature": "acwr",
+        "label": "Ratio charge aiguë/chronique (ACWR)",
+        "moyenne_faux_negatifs": 1.04,
+        "moyenne_vrais_positifs": 1.15
+      },
+      {
+        "feature": "charge_chronique",
+        "label": "Charge chronique (28j)",
+        "moyenne_faux_negatifs": 420.89,
+        "moyenne_vrais_positifs": 424.55
+      },
+      {
+        "feature": "fc_repos_estimee",
+        "label": "Fréquence cardiaque de repos",
+        "moyenne_faux_negatifs": 63.27,
+        "moyenne_vrais_positifs": 62.17
+      },
+      {
+        "feature": "sommeil_h",
+        "label": "Heures de sommeil",
+        "moyenne_faux_negatifs": 7.26,
+        "moyenne_vrais_positifs": 6.1
+      },
+      {
+        "feature": "age",
+        "label": "Âge",
+        "moyenne_faux_negatifs": 24.04,
+        "moyenne_vrais_positifs": 23.71
+      },
+      {
+        "feature": "imc",
+        "label": "IMC",
+        "moyenne_faux_negatifs": 22.8,
+        "moyenne_vrais_positifs": 22.47
+      },
+      {
+        "feature": "historique_blessures",
+        "label": "Historique de blessures",
+        "moyenne_faux_negatifs": 0.64,
+        "moyenne_vrais_positifs": 1.36
+      },
+      {
+        "feature": "deficit_calorique_pct",
+        "label": "Écart calorique vs TDEE",
+        "moyenne_faux_negatifs": -0.99,
+        "moyenne_vrais_positifs": 3.09
+      },
+      {
+        "feature": "lactate",
+        "label": "Taux de lactate",
+        "moyenne_faux_negatifs": 2.41,
+        "moyenne_vrais_positifs": 2.07
+      },
+      {
+        "feature": "intensite_moyenne_7j",
+        "label": "Intensité d'effort (7 derniers jours)",
+        "moyenne_faux_negatifs": 0.55,
+        "moyenne_vrais_positifs": 0.61
+      }
+    ]
+  },
+  "figure_calibration": "calibration_curve.png",
+  "sous_groupes": {
+    "Âge": [
+      {
+        "groupe": "< 22 ans",
+        "n": 2023,
+        "n_positifs": 408,
+        "auc": 0.688,
+        "ic95": [
+          0.66,
+          0.717
+        ],
+        "fiable": true
+      },
+      {
+        "groupe": "22–28 ans",
+        "n": 3002,
+        "n_positifs": 617,
+        "auc": 0.686,
+        "ic95": [
+          0.662,
+          0.709
+        ],
+        "fiable": true
+      },
+      {
+        "groupe": "> 28 ans",
+        "n": 975,
+        "n_positifs": 189,
+        "auc": 0.674,
+        "ic95": [
+          0.626,
+          0.714
+        ],
+        "fiable": true
+      }
+    ],
+    "Historique de blessures": [
+      {
+        "groupe": "Aucune blessure passée",
+        "n": 2976,
+        "n_positifs": 471,
+        "auc": 0.659,
+        "ic95": [
+          0.633,
+          0.688
+        ],
+        "fiable": true
+      },
+      {
+        "groupe": "≥ 1 blessure passée",
+        "n": 3024,
+        "n_positifs": 743,
+        "auc": 0.679,
+        "ic95": [
+          0.656,
+          0.702
+        ],
+        "fiable": true
+      }
+    ],
+    "Sommeil moyen": [
+      {
+        "groupe": "< 6,5 h",
+        "n": 1989,
+        "n_positifs": 581,
+        "auc": 0.679,
+        "ic95": [
+          0.654,
+          0.705
+        ],
+        "fiable": true
+      },
+      {
+        "groupe": "≥ 6,5 h",
+        "n": 4011,
+        "n_positifs": 633,
+        "auc": 0.643,
+        "ic95": [
+          0.621,
+          0.667
+        ],
+        "fiable": true
+      }
+    ]
+  }
+}

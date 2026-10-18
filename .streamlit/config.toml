@@ -1,0 +1,11 @@
+# Thème Streamlit d'ATHÉNA : couleur d'accent unique (bleu pétrole) à la place
+# du rouge par défaut, appliquée aux curseurs, boutons radio, onglets et liens.
+[theme]
+base = "light"
+primaryColor = "#1B6E8C"
+backgroundColor = "#F4F7F9"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#1F2937"
+
+[browser]
+gatherUsageStats = false

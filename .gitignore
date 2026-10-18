@@ -29,3 +29,12 @@ Thumbs.db
 dist/
 build/
 *.egg-info/
+
+# Modèle de pose MediaPipe (téléchargé par : python -m computer_vision.pose_analysis --setup)
+computer_vision/artifacts/*.task
+
+# Sorties du testeur CSV
+sorties_test/
+
+# Données réelles d'athlètes (personnelles) : ne jamais publier
+data/real/

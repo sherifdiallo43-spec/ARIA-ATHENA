@@ -57,7 +57,7 @@ def generer_recommandations_coach(profil_risque: dict, acwr_info: dict,
         })
 
     # --- Nutrition ---
-    if bilan_calorique["tdee"] > 0:
+    if bilan_calorique["tdee"] > 0 and bilan_calorique.get("renseigne", True):
         ecart = (bilan_calorique["kcal_consommees"] - bilan_calorique["tdee"]) / bilan_calorique["tdee"]
         if ecart < -0.15:
             reco.append({

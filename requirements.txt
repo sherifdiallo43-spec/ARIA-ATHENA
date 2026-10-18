@@ -1,3 +1,9 @@
+# ATHÉNA — dépendances. Testées dans l'environnement de développement avec :
+#   Python 3.12 · numpy 2.4 · pandas 3.0 · scikit-learn 1.8 · scipy 1.17 · joblib 1.5 ·
+#   matplotlib 3.10 · reportlab 4.4 · opencv 4.13 · mediapipe 0.10.33
+# NON testés ici (environnement sans accès réseau) : streamlit, plotly — vérifier au lancement.
+# Les modèles .joblib sont sensibles à la version de scikit-learn : si le chargement échoue,
+# relancer `python -m models.train_injury_model` pour les régénérer.
 streamlit>=1.37
 plotly>=5.18
 pandas>=2.0

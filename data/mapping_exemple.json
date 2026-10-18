@@ -1,0 +1,9 @@
+{
+  "athlete_id": "NOM_COLONNE_ID_DANS_LE_FICHIER",
+  "date": "NOM_COLONNE_DATE",
+  "rpe": "NOM_COLONNE_EFFORT_PERCU",
+  "duree_min": "NOM_COLONNE_DUREE_MINUTES",
+  "sommeil_h": "NOM_COLONNE_SOMMEIL",
+  "fc_repos": "NOM_COLONNE_FC_REPOS",
+  "blessure": "NOM_COLONNE_BLESSURE_0_OU_1"
+}

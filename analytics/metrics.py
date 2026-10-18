@@ -23,13 +23,13 @@ def calculer_acwr(df_charge: pd.DataFrame) -> dict:
     acwr = aigue / chronique if chronique > 0 else 0
 
     if acwr < 0.8:
-        zone, couleur = "Sous-charge", "#00B4D8"
+        zone, couleur = "Sous-charge", "#5B9BB0"
     elif acwr <= 1.3:
-        zone, couleur = "Zone optimale", "#06D6A0"
+        zone, couleur = "Zone optimale", "#1F7A52"
     elif acwr <= 1.5:
-        zone, couleur = "Prudence", "#FFB703"
+        zone, couleur = "Prudence", "#B26B00"
     else:
-        zone, couleur = "Risque élevé", "#FF2E63"
+        zone, couleur = "Risque élevé", "#C0283D"
 
     return {
         "acwr": round(acwr, 2), "aigue": round(aigue, 1), "chronique": round(chronique, 1),
@@ -79,7 +79,9 @@ def moteur_de_decision(vitals: dict, acwr_info: dict, bilan_calorique: dict,
         alertes.append(("Attention", f"ACWR en zone de prudence ({acwr_info['acwr']})",
                          "Surveiller l'évolution de la charge sur les prochains jours."))
 
-    if bilan_calorique["tdee"] > 0:
+    # Si aucun repas n'a été saisi, on ne peut pas conclure à un déficit : la
+    # donnée est absente (et non égale à 0 kcal) -> aucune alerte nutritionnelle.
+    if bilan_calorique["tdee"] > 0 and bilan_calorique.get("renseigne", True):
         ecart = (bilan_calorique["kcal_consommees"] - bilan_calorique["tdee"]) / bilan_calorique["tdee"]
         if ecart < -0.20:
             alertes.append(("Attention", "Déficit calorique important (> 20%)",
@@ -120,7 +122,7 @@ def calculer_performance_score(acwr_info: dict, injury_risk_pct: float,
     recuperation = max(0, 100 - fatigue_score * 10)
 
     # Nutrition : proximité du TDEE
-    if bilan_calorique["tdee"] > 0:
+    if bilan_calorique["tdee"] > 0 and bilan_calorique.get("renseigne", True):
         ecart_nutrition = abs(bilan_calorique["kcal_consommees"] - bilan_calorique["tdee"]) / bilan_calorique["tdee"]
         nutrition = max(0, 100 - ecart_nutrition * 150)
     else:

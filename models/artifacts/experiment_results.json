@@ -6,10 +6,10 @@
   "test_hypothese": {
     "n_tirages_valides": 1000,
     "proportion_gb_superieur": 0.907,
-    "diff_auc_moyenne": 0.0187,
+    "diff_auc_moyenne": 0.0186,
     "ic95_diff_auc": [
-      -0.0093,
-      0.049
+      -0.0094,
+      0.0489
     ]
   },
   "validation_croisee_5fold": [
@@ -22,25 +22,87 @@
     },
     {
       "modele": "Random Forest",
-      "roc_auc_moyen": 0.6872,
-      "roc_auc_ecart_type": 0.0105,
-      "f1_moyen": 0.4233,
-      "f1_ecart_type": 0.0104
+      "roc_auc_moyen": 0.6533,
+      "roc_auc_ecart_type": 0.0145,
+      "f1_moyen": 0.3515,
+      "f1_ecart_type": 0.0017
     },
     {
       "modele": "Gradient Boosting (retenu en production)",
-      "roc_auc_moyen": 0.6748,
-      "roc_auc_ecart_type": 0.0143,
-      "f1_moyen": 0.4093,
-      "f1_ecart_type": 0.011
+      "roc_auc_moyen": 0.6746,
+      "roc_auc_ecart_type": 0.0142,
+      "f1_moyen": 0.4091,
+      "f1_ecart_type": 0.0109
+    },
+    {
+      "modele": "HistGradientBoosting (natif NaN)",
+      "roc_auc_moyen": 0.6729,
+      "roc_auc_ecart_type": 0.0113,
+      "f1_moyen": 0.4104,
+      "f1_ecart_type": 0.0087
     }
   ],
+  "variance_multi_seed": {
+    "n_seeds": 10,
+    "classification_roc_auc": {
+      "Logistic Regression (baseline)": {
+        "moyenne": 0.6774,
+        "ecart_type": 0.0187,
+        "min": 0.6506,
+        "max": 0.7206
+      },
+      "Random Forest": {
+        "moyenne": 0.6913,
+        "ecart_type": 0.0203,
+        "min": 0.6563,
+        "max": 0.7402
+      },
+      "Gradient Boosting (retenu en production)": {
+        "moyenne": 0.6821,
+        "ecart_type": 0.0164,
+        "min": 0.6582,
+        "max": 0.7238
+      },
+      "HistGradientBoosting (natif NaN)": {
+        "moyenne": 0.6809,
+        "ecart_type": 0.0195,
+        "min": 0.6461,
+        "max": 0.7296
+      }
+    },
+    "regression_r2": {
+      "Linear Regression (baseline)": {
+        "moyenne": 0.5013,
+        "ecart_type": 0.0206,
+        "min": 0.4691,
+        "max": 0.5369
+      },
+      "Random Forest": {
+        "moyenne": 0.6451,
+        "ecart_type": 0.0188,
+        "min": 0.6248,
+        "max": 0.6842
+      },
+      "Gradient Boosting (retenu en production)": {
+        "moyenne": 0.6522,
+        "ecart_type": 0.0173,
+        "min": 0.6318,
+        "max": 0.6885
+      },
+      "HistGradientBoosting (natif NaN)": {
+        "moyenne": 0.6509,
+        "ecart_type": 0.0168,
+        "min": 0.6323,
+        "max": 0.6866
+      }
+    }
+  },
   "seuil_optimise": {
-    "seuil_optimal": 0.5323,
-    "accuracy": 0.7258,
-    "precision": 0.3811,
-    "recall": 0.498,
-    "f1": 0.4318
+    "seuil_optimal": 0.5286,
+    "accuracy": 0.7208,
+    "precision": 0.3757,
+    "recall": 0.506,
+    "f1": 0.4312
   },
   "conditions_experimentales": {
     "n_echantillons": 6000,
@@ -60,7 +122,7 @@
     ],
     "random_state": 42,
     "split": "80/20",
-    "ponderation": "balanced (class_weight / sample_weight) sur les 3 modèles"
+    "ponderation": "balanced (class_weight / sample_weight) sur les 4 modèles"
   },
   "classification_injury_risk": [
     {
@@ -73,11 +135,11 @@
     },
     {
       "modele": "Random Forest",
-      "accuracy": 0.6858,
-      "precision": 0.3486,
-      "recall": 0.5777,
-      "f1": 0.4348,
-      "roc_auc": 0.6992
+      "accuracy": 0.6942,
+      "precision": 0.3482,
+      "recall": 0.5299,
+      "f1": 0.4202,
+      "roc_auc": 0.695
     },
     {
       "modele": "Gradient Boosting (retenu en production)",
@@ -85,7 +147,15 @@
       "precision": 0.3377,
       "recall": 0.5139,
       "f1": 0.4076,
-      "roc_auc": 0.6899
+      "roc_auc": 0.6898
+    },
+    {
+      "modele": "HistGradientBoosting (natif NaN)",
+      "accuracy": 0.6992,
+      "precision": 0.3472,
+      "recall": 0.498,
+      "f1": 0.4092,
+      "roc_auc": 0.686
     }
   ],
   "regression_fatigue": [
@@ -97,7 +167,7 @@
     },
     {
       "modele": "Random Forest",
-      "mae": 0.6533,
+      "mae": 0.6532,
       "rmse": 0.8187,
       "r2": 0.6513
     },
@@ -106,16 +176,22 @@
       "mae": 0.6436,
       "rmse": 0.8115,
       "r2": 0.6574
+    },
+    {
+      "modele": "HistGradientBoosting (natif NaN)",
+      "mae": 0.6516,
+      "rmse": 0.8178,
+      "r2": 0.652
     }
   ],
   "figures": {
-    "roc_curves": "C:\\Users\\DELL\\Documents\\pythonprojet\\athena\\reports\\artifacts_figures\\roc_curves.png",
-    "confusion_matrix": "C:\\Users\\DELL\\Documents\\pythonprojet\\athena\\reports\\artifacts_figures\\confusion_matrix.png",
-    "feature_importance": "C:\\Users\\DELL\\Documents\\pythonprojet\\athena\\reports\\artifacts_figures\\feature_importance.png"
+    "roc_curves": "roc_curves.png",
+    "confusion_matrix": "confusion_matrix.png",
+    "feature_importance": "feature_importance.png"
   },
   "conclusion": {
     "meilleur_modele_classification": "Random Forest",
-    "roc_auc_meilleur": 0.6992,
+    "roc_auc_meilleur": 0.695,
     "meilleur_modele_regression": "Gradient Boosting (retenu en production)",
     "mae_meilleur": 0.6436
   }
