@@ -95,6 +95,30 @@ def main():
     print(f"[{'OK' if cond else 'ÉCHEC'}] gabarit CSV")
     ok &= cond
 
+    # 7. Import d'un CSV : fichier incompatible refusé, format Excel français accepté.
+    #    Le journal est redirigé vers un fichier temporaire : data/real/ n'est jamais touché.
+    import io
+    import tempfile
+    import data.donnees_reelles as D
+    vrai_chemin = D.CHEMIN_JOURNAL
+    D.CHEMIN_JOURNAL = Path(tempfile.mkdtemp(prefix="athena_journal_")) / "journal.csv"
+    try:
+        jo = io.BytesIO(b'"ID","Name","Age","Height","Weight","Medal"\n"1","A","24","180","80","NA"\n')
+        _, rap = D.importer_csv(jo)
+        cond = rap["statut"] == "incompatible" and "date" in rap["message"] and not D.CHEMIN_JOURNAL.exists()
+        print(f"[{'OK' if cond else 'ÉCHEC'}] fichier incompatible refusé sans toucher au journal")
+        ok &= cond
+
+        excel = io.BytesIO("Athlète;Date;RPE;Durée;Sommeil;Blessure\nA01;2026-03-01;6;60;7,5;0\n"
+                           "A01;2026-03-02;7;75;6,5;1\n".encode("latin-1"))
+        journal, rap = D.importer_csv(excel)
+        cond = (rap["statut"] == "ok" and rap["lignes_valides"] == 2
+                and journal["sommeil_h"].tolist() == [7.5, 6.5] and journal["blessure"].tolist() == [0, 1])
+        print(f"[{'OK' if cond else 'ÉCHEC'}] CSV Excel français (« ; », virgule décimale, accents) importé")
+        ok &= cond
+    finally:
+        D.CHEMIN_JOURNAL = vrai_chemin
+
     print("\nTous les tests passent." if ok else "\nDes tests ont échoué.")
     sys.exit(0 if ok else 1)
 

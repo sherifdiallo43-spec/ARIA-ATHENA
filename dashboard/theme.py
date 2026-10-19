@@ -74,8 +74,15 @@ def injecter_theme():
         [data-testid="stCaptionContainer"] {{ color: {p['texte_doux']}; }}
 
         /* --- Masquer l'habillage de développement de Streamlit --- */
-        [data-testid="stToolbar"], [data-testid="stDecoration"], #MainMenu, footer {{ display: none !important; }}
+        /* On ne masque PAS stToolbar : il contient le bouton qui rouvre la barre latérale repliée. */
+        [data-testid="stToolbarActions"], [data-testid="stMainMenu"], [data-testid="stAppDeployButton"],
+        [data-testid="stDecoration"], #MainMenu, footer {{ display: none !important; }}
         header[data-testid="stHeader"] {{ background: transparent; }}
+        [data-testid="stExpandSidebarButton"] {{
+            display: flex !important; visibility: visible !important;
+            background: {p['carte']}; border: 1px solid {p['bordure']}; border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12);
+        }}
 
         /* --- Barre latérale --- */
         section[data-testid="stSidebar"] {{ background: {p['carte']}; border-right: 1px solid {p['bordure']}; }}
@@ -86,6 +93,13 @@ def injecter_theme():
         .marque {{ padding: 4px 0 14px 0; border-bottom: 1px solid {p['bordure']}; margin-bottom: 6px; }}
         .marque-nom {{ font-family: Montserrat, Inter, sans-serif; font-size: 1.45rem; font-weight: 800; color: {p['encre']}; letter-spacing: 0.04em; }}
         .marque-nom span {{ color: {p['accent']}; }}
+        .marque-logo {{ display: block; width: 100%; max-width: 210px; height: auto; margin: 0 auto 4px auto; }}
+        .marque-sous {{ text-align: center; }}
+        .entete-gauche {{ display: flex; align-items: center; gap: 20px; }}
+        .entete-logo {{
+            background: #FFFFFF; border-radius: 12px; padding: 6px 10px; height: 104px; width: auto;
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18); flex-shrink: 0;
+        }}
         .marque-sous {{ font-size: 0.72rem; color: {p['texte_doux']}; letter-spacing: 0.1em; text-transform: uppercase; }}
 
         /* --- En-tête principal --- */
@@ -187,7 +201,8 @@ def couleur_niveau(niveau: str) -> str:
 
 def marque_barre_laterale():
     st.markdown(
-        '<div class="marque"><div class="marque-nom">ATH<span>É</span>NA</div>'
+        '<div class="marque"><img class="marque-logo" src="app/static/logo_athena.png" '
+        'alt="ATHÉNA, Advanced Total Health and Energy Network Artificial Intelligence">'
         '<div class="marque-sous">ARiA Tech · PARC 2026</div></div>',
         unsafe_allow_html=True,
     )
@@ -199,9 +214,12 @@ def en_tete(athlete: str, profil_risque: dict, acwr_info: dict, mode_simulation:
     st.markdown(
         f"""
         <div class="entete">
-          <div>
-            <div class="entete-titre">ATHÉNA · Plateforme IA sportive prédictive</div>
-            <div class="entete-sous">Risque de blessure, fatigue et charge d'entraînement · ARiA Tech · PARC 2026, Ligue IA</div>
+          <div class="entete-gauche">
+            <img class="entete-logo" src="app/static/logo_athena.png" alt="Logo ATHÉNA">
+            <div>
+              <div class="entete-titre">Plateforme IA sportive prédictive</div>
+              <div class="entete-sous">Risque de blessure, fatigue et charge d'entraînement · ARiA Tech · PARC 2026, Ligue IA</div>
+            </div>
           </div>
           <div class="entete-droite">
             <div class="entete-bloc"><div class="entete-bloc-label">Athlète</div>

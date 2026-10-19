@@ -65,6 +65,15 @@ SYNONYMES = {
     "intensite_moyenne_7j": ["intensite_moyenne_7j", "intensite", "intensite_7j", "intensity", "avg_intensity",
                              "mean_intensity_7d", "intensity_7d", "training_intensity"],
 }
+# Pour calculer l'IMC quand le fichier donne le poids et la taille mais pas l'IMC.
+SYN_POIDS = ["poids", "poids_kg", "weight", "weight_kg", "masse", "masse_kg", "mass", "body_mass"]
+SYN_TAILLE = ["taille", "taille_cm", "taille_m", "height", "height_cm", "height_m", "stature"]
+
+# Variables qui portent l'essentiel de l'information du modèle (importance par permutation,
+# rapport final, figure 6b). Sans aucune d'elles, les scores ne départagent presque pas les athlètes.
+VARIABLES_CLES = ["sommeil_h", "historique_blessures", "acwr"]
+SEUIL_HORS_DOMAINE = 0.20   # au-delà de 20 % de valeurs bornées, la variable sort du domaine appris
+
 SYN_ETIQUETTE = ["blessure", "blesse", "injury", "injured", "injury_occurred", "label", "target", "y", "cible", "is_injured"]
 SYN_FATIGUE = ["fatigue", "fatigue_score", "fatigue_level", "niveau_fatigue", "score_fatigue"]
 VRAI = {"1", "true", "vrai", "oui", "yes", "y", "o", "blesse", "injured", "injury", "positive", "pos"}
@@ -148,6 +157,67 @@ def associer_colonnes(df: pd.DataFrame, mapping: dict | None = None) -> dict:
             utilisees.add(c)
     resultat["_utilisees"] = utilisees
     return resultat
+
+
+def deriver_imc(df: pd.DataFrame, assoc: dict) -> tuple[pd.DataFrame, list]:
+    """Si l'IMC manque mais que le poids (kg) et la taille (cm ou m) sont présents, l'IMC est
+    calculé (poids / taille²) et signalé comme tel. Une taille médiane > 3 est lue en cm."""
+    notes = []
+    if assoc["imc"]["colonne"]:
+        return df, notes
+    utilisees = set(assoc.get("_utilisees", set()))
+    col_p = next((c for c in df.columns if c not in utilisees and _norm(c) in SYN_POIDS), None)
+    col_t = next((c for c in df.columns if c not in utilisees and _norm(c) in SYN_TAILLE), None)
+    if not (col_p and col_t):
+        return df, notes
+    poids, taille = _en_numerique(df[col_p]), _en_numerique(df[col_t])
+    if taille.median() > 3:
+        taille = taille / 100
+    nom = f"IMC calculé ({col_p} / {col_t}²)"
+    df = df.copy()
+    df[nom] = (poids / taille ** 2).round(2)
+    assoc["imc"] = {"colonne": nom, "methode": "calculé (poids / taille²)"}
+    assoc.setdefault("_utilisees", set()).update({col_p, col_t, nom})
+    notes.append(f"IMC calculé à partir de « {col_p} » et « {col_t} » (taille lue en "
+                 f"{'cm' if _en_numerique(df[col_t]).median() > 3 else 'm'}).")
+    return df, notes
+
+
+def verdict_compatibilite(assoc: dict, qualite: dict, n_lignes: int, score: np.ndarray) -> dict:
+    """Dit honnêtement si le fichier permet au modèle de produire des scores utiles.
+    - incompatible : aucune des variables clés n'est mesurée, les scores sont quasi constants ;
+    - partiel : moins de 5 variables, une variable clé manque, ou les données sortent du domaine appris ;
+    - compatible : sinon."""
+    mesurees = [f for f in FEATURE_NAMES if assoc[f]["colonne"]]
+    cles_presentes = [f for f in VARIABLES_CLES if f in mesurees]
+    hors_domaine = {f: round((qualite[f]["sous_domaine"] + qualite[f]["sur_domaine"]) / max(1, n_lignes), 3)
+                    for f in mesurees}
+    hors_domaine = {f: t for f, t in hors_domaine.items() if t > SEUIL_HORS_DOMAINE}
+    dispersion = float(np.std(score)) if len(score) else 0.0
+    raisons = []
+    if not cles_presentes:
+        statut = "incompatible"
+        raisons.append("Aucune des variables qui portent l'essentiel de l'information du modèle "
+                       f"({', '.join(LABELS_LISIBLES[f] for f in VARIABLES_CLES)}) n'est présente.")
+    elif len(mesurees) < 5 or len(cles_presentes) < len(VARIABLES_CLES) or hors_domaine:
+        statut = "partiel"
+    else:
+        statut = "compatible"
+    if len(mesurees) < 5:
+        raisons.append(f"Seulement {len(mesurees)} variable(s) sur 10 trouvée(s).")
+    manquantes_cles = [LABELS_LISIBLES[f] for f in VARIABLES_CLES if f not in mesurees]
+    if cles_presentes and manquantes_cles:
+        raisons.append("Variable(s) clé(s) absente(s) : " + ", ".join(manquantes_cles) + ".")
+    for f, t in hors_domaine.items():
+        raisons.append(f"{LABELS_LISIBLES[f]} : {t * 100:.0f} % des valeurs hors du domaine appris "
+                       f"{DOMAINE_ENTRAINEMENT[f]} (bornées) ; le modèle extrapole.")
+    if dispersion < 0.02:
+        raisons.append(f"Les scores varient à peine (écart-type {dispersion:.3f}) : le modèle ne départage "
+                       "pas les athlètes de ce fichier.")
+        if statut == "compatible":
+            statut = "partiel"
+    return {"statut": statut, "raisons": raisons, "variables_cles_presentes": cles_presentes,
+            "hors_domaine": hors_domaine, "dispersion_scores": round(dispersion, 4)}
 
 
 def _trouver(df, nom_force, synonymes, exclues):
@@ -297,6 +367,7 @@ def scores_etude(bundle: dict, Xte: np.ndarray) -> dict:
 def analyser(chemin_test, cible=None, fatigue=None, mapping=None, chemin_train=None, n_boot=1000) -> dict:
     df = lire_csv(chemin_test)
     assoc = associer_colonnes(df, mapping)
+    df, notes_imc = deriver_imc(df, assoc)
     exclues = set(assoc.pop("_utilisees"))
     col_y = _trouver(df, cible, SYN_ETIQUETTE, exclues)
     exclues |= {col_y} if col_y else set()
@@ -316,7 +387,8 @@ def analyser(chemin_test, cible=None, fatigue=None, mapping=None, chemin_train=N
     res = {"fichier": str(chemin_test), "date": datetime.now().isoformat(timespec="seconds"),
            "lignes": int(len(df)), "colonnes_fichier": list(map(str, df.columns)),
            "correspondance": {f: assoc[f] for f in FEATURE_NAMES}, "variables_mesurees": n_mesurees,
-           "qualite": stats, "avertissements": []}
+           "qualite": stats, "avertissements": list(notes_imc)}
+    res["verdict"] = verdict_compatibilite(assoc, stats, len(df), score)
     absentes = [f for f in FEATURE_NAMES if not assoc[f]["colonne"]]
     if absentes:
         res["avertissements"].append("Variables absentes, remplacées par le milieu du domaine d'entraînement : "
@@ -385,8 +457,13 @@ def _f(x, nd=3):
 
 def rapport_md(res: dict) -> str:
     L = [f"# Rapport de test ATHÉNA — {Path(res['fichier']).name}", "",
-         f"Date : {res['date']} · lignes : {res['lignes']} · variables du modèle trouvées : {res['variables_mesurees']}/10", "",
-         "## Correspondance des colonnes", "", "| Variable du modèle | Colonne du fichier | Méthode |", "|---|---|---|"]
+         f"Date : {res['date']} · lignes : {res['lignes']} · variables du modèle trouvées : {res['variables_mesurees']}/10", ""]
+    v = res.get("verdict")
+    if v:
+        L += [f"## Verdict : fichier {v['statut'].upper()}", ""]
+        L += [f"- {r}" for r in v["raisons"]] or ["- Toutes les variables clés sont présentes et dans le domaine appris."]
+        L.append("")
+    L += ["## Correspondance des colonnes", "", "| Variable du modèle | Colonne du fichier | Méthode |", "|---|---|---|"]
     for f in FEATURE_NAMES:
         a = res["correspondance"][f]
         L.append(f"| {LABELS_LISIBLES[f]} | {a['colonne'] or '— (absente)'} | {a['methode']} |")
@@ -463,6 +540,13 @@ def jeu_de_repetition(dossier: Path, n=3000, graine=123) -> Path:
 
 
 def main(argv=None):
+    # La console Windows (cp1252) ne sait pas afficher « ⚠️ » ou « ² » : sans cela, le rapport
+    # plantait à l'affichage, après le calcul (le jour J, devant le jury).
+    for flux in (sys.stdout, sys.stderr):
+        try:
+            flux.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     ap = argparse.ArgumentParser(description="Test en direct d'ATHÉNA sur un CSV inédit.")
     ap.add_argument("--test", help="CSV inédit à évaluer")
     ap.add_argument("--train", help="CSV d'entraînement (optionnel) : réentraîne les modèles de l'étude")

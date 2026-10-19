@@ -63,8 +63,8 @@ else:
 # Polices et logo servis en local (dashboard/static + .streamlit/config.toml)
 statique = RACINE / "dashboard" / "static"
 polices = list((statique / "fonts").glob("*.woff2"))
-if len(polices) >= 7 and (statique / "logo_guindy.png").exists() and (RACINE / ".streamlit" / "config.toml").exists():
-    noter("OK", f"Polices ({len(polices)} fichiers) et logo présents en local (affichage identique sans internet)")
+if len(polices) >= 7 and (statique / "logo_guindy.png").exists() and (statique / "logo_athena.png").exists() and (RACINE / ".streamlit" / "config.toml").exists():
+    noter("OK", f"Polices ({len(polices)} fichiers) et logos présents en local (affichage identique sans internet)")
 else:
     noter("AVERT", "Polices ou logo absents de dashboard/static (ou .streamlit/config.toml manquant) : "
                    "l'app s'affichera avec la police par défaut et sans logo")

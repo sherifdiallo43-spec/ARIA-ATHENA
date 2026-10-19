@@ -130,6 +130,48 @@ def test_ligne_de_commande():
     print("[OK] ligne de commande : --demo et erreur propre (code 2)")
 
 
+def test_verdict_et_imc_calcule():
+    # Fichier de type « résultats olympiques » : âge, poids, taille, médaille, mais aucune variable clé.
+    d = _tmp()
+    rng = np.random.default_rng(7)
+    n = 400
+    jo = pd.DataFrame({"ID": range(n), "Name": [f"Athlete {i}" for i in range(n)], "Sex": "M",
+                       "Age": rng.integers(18, 35, n), "Height": rng.integers(160, 200, n),
+                       "Weight": rng.integers(55, 100, n), "Medal": rng.choice(["Gold", "NA"], n)})
+    jo.to_csv(d / "jo.csv", index=False)
+    res = T.analyser(d / "jo.csv")
+    assert res["correspondance"]["imc"]["methode"].startswith("calculé"), res["correspondance"]["imc"]
+    imc = pd.to_numeric(res["_predictions"][res["correspondance"]["imc"]["colonne"]])
+    attendu = jo["Weight"] / (jo["Height"] / 100) ** 2
+    assert np.allclose(imc, attendu.round(2)), "IMC mal calculé"
+    assert res["verdict"]["statut"] == "incompatible", res["verdict"]
+    assert "production" not in res                     # « Medal » n'est pas lue comme une blessure
+    # Le jeu de répétition, lui, est compatible.
+    rep = T.analyser(T.jeu_de_repetition(d, n=1500, graine=11))
+    assert rep["verdict"]["statut"] == "compatible", rep["verdict"]
+    # Données hors du domaine appris : verdict partiel, variable citée.
+    X, y, _ = _generer_dataset(n=600, graine=3)
+    hors = pd.DataFrame(X, columns=FEATURE_NAMES)
+    hors["age"] = 60
+    hors["blessure"] = y
+    hors.to_csv(d / "hors.csv", index=False)
+    v = T.analyser(d / "hors.csv")["verdict"]
+    assert v["statut"] == "partiel" and "age" in v["hors_domaine"], v
+    print("[OK] verdict incompatible / compatible / partiel, IMC calculé depuis poids et taille")
+
+
+def test_rapport_console_windows():
+    # Le rapport contient « ⚠️ » et « ² » : il ne doit pas planter sur une console cp1252.
+    import contextlib
+    import io
+    d = _tmp()
+    tampon = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", errors="strict")
+    with contextlib.redirect_stdout(tampon):
+        code = T.main(["--demo", "--sortie", str(d)])
+    assert code == 0
+    print("[OK] rapport affiché sans erreur sur une console Windows (cp1252)")
+
+
 if __name__ == "__main__":
     for nom, f in list(globals().items()):
         if nom.startswith("test_"):

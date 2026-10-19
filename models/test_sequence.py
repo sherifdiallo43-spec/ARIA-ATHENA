@@ -83,9 +83,38 @@ def main():
         except ValueError:
             verif("vidéo inexistante -> erreur claire", True)
 
+        # Vidéo Full HD : images réduites à la lecture (mémoire), puis vidéo annotée lisible par un navigateur
+        from computer_vision.analyse_sequence import generer_video_annotee, LARGEUR_ANALYSE
+        chemin_hd = str(Path(d) / "fullhd.avi")
+        ecrivain = cv2.VideoWriter(chemin_hd, cv2.VideoWriter_fourcc(*"MJPG"), 30, (1920, 1080))
+        for k in range(90):
+            img = np.full((1080, 1920, 3), 40, dtype=np.uint8)
+            cv2.rectangle(img, (100 + 15 * k, 400), (300 + 15 * k, 700), (200, 120, 30), -1)
+            ecrivain.write(img)
+        ecrivain.release()
+        frames_hd, _ = lire_frames(chemin_hd, fps_cible=10)
+        verif("vidéo 1920 px réduite à la lecture", frames_hd[0].shape[1] == LARGEUR_ANALYSE,
+              f"({frames_hd[0].shape[1]} px)")
+        annotee = generer_video_annotee(chemin_hd, [None] * len(frames_hd))
+        relues = 0
+        if annotee:
+            sortie = Path(d) / ("annotee.webm" if annotee[1] == "video/webm" else "annotee.mp4")
+            sortie.write_bytes(annotee[0])
+            cap = cv2.VideoCapture(str(sortie))
+            while cap.read()[0]:
+                relues += 1
+            cap.release()
+        verif("vidéo annotée produite et relisible", annotee is not None and relues == len(frames_hd),
+              f"({annotee[1] if annotee else 'aucune'}, {relues} images)")
+
     print("\nTous les tests passent." if ok else "\nDes tests ont échoué.")
     sys.exit(0 if ok else 1)
 
 
 if __name__ == "__main__":
+    for _flux in (sys.stdout, sys.stderr):   # console Windows (cp1252) : « ≈ » faisait planter l'affichage
+        try:
+            _flux.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     main()

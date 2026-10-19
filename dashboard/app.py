@@ -223,9 +223,9 @@ en_tete(nom_athlete, profil_risque, acwr_info, mode_simulation)
 # ONGLETS PRINCIPAUX
 onglets = st.tabs([
     "Démo Guidée", "IA Prédictive", "Monitoring", "Charge & ACWR", "Nutrition",
-    "Decision Engine", "Analyse Vidéo", "National Team", "Étude Scientifique", "Données Réelles",
+    "Décisions", "Analyse Vidéo", "National Team", "Étude Scientifique", "Données Réelles", "Test CSV",
 ])
-(onglet10, onglet5, onglet1, onglet2, onglet3, onglet4, onglet6, onglet7, onglet8, onglet9) = onglets
+(onglet10, onglet5, onglet1, onglet2, onglet3, onglet4, onglet6, onglet7, onglet8, onglet9, onglet11) = onglets
 
 # ONGLET 1 : MONITORING TEMPS RÉEL
 with onglet1:
@@ -616,23 +616,53 @@ with onglet6:
     )
     fichier_video = st.file_uploader("Vidéo de l'athlète (MP4/MOV/AVI)", type=["mp4", "mov", "avi"], key="upload_video_seq")
     if fichier_video is not None:
-        from computer_vision.analyse_sequence import analyser_video
-        with tempfile.NamedTemporaryFile(suffix=Path(fichier_video.name).suffix, delete=False) as tmp_video:
-            tmp_video.write(fichier_video.read())
-            chemin_tmp_video = tmp_video.name
-        resultat_seq = None
-        try:
-            barre = st.progress(0.0, text="Analyse de la séquence en cours…")
-            resultat_seq = analyser_video(chemin_tmp_video, mouvement=mouvement_analyse,
-                                          rappel_progression=lambda p: barre.progress(min(1.0, p)))
-            barre.empty()
-        except ValueError as e:
-            st.error(f"Vidéo non exploitable : {e}")
-        except Exception as e:  # noqa: BLE001 - modèle de pose absent, etc.
-            st.error("L'analyse n'a pas pu s'exécuter (modèle de pose absent ? lancer "
-                     f"`python -m computer_vision.pose_analysis --setup` avec internet). Détail : {e}")
-        finally:
-            Path(chemin_tmp_video).unlink(missing_ok=True)
+        from computer_vision.analyse_sequence import analyser_video, generer_video_annotee
+        octets_video = fichier_video.getvalue()
+        type_video = {".mov": "video/quicktime", ".avi": "video/x-msvideo"}.get(
+            Path(fichier_video.name).suffix.lower(), "video/mp4")
+        # L'analyse (~10-20 s) est gardée en session : toucher un curseur ne la relance plus.
+        cle_video = (fichier_video.name, len(octets_video), mouvement_analyse)
+        cache_video = st.session_state.get("analyse_video")
+        if not cache_video or cache_video["cle"] != cle_video:
+            with tempfile.NamedTemporaryFile(suffix=Path(fichier_video.name).suffix, delete=False) as tmp_video:
+                tmp_video.write(octets_video)
+                chemin_tmp_video = tmp_video.name
+            cache_video = {"cle": cle_video, "resultat": None, "annotee": None, "erreur": None}
+            try:
+                barre = st.progress(0.0, text="Analyse de la séquence en cours…")
+                resultat_seq = analyser_video(chemin_tmp_video, mouvement=mouvement_analyse,
+                                              rappel_progression=lambda p: barre.progress(min(1.0, p)))
+                barre.progress(1.0, text="Préparation de la vidéo annotée…")
+                cache_video["annotee"] = generer_video_annotee(chemin_tmp_video, resultat_seq["landmarks_par_image"])
+                resultat_seq.pop("landmarks_par_image", None)
+                cache_video["resultat"] = resultat_seq
+                barre.empty()
+            except ValueError as e:
+                cache_video["erreur"] = f"Vidéo non exploitable : {e}"
+            except Exception as e:  # noqa: BLE001 - modèle de pose absent, etc.
+                cache_video["erreur"] = ("L'analyse n'a pas pu s'exécuter (modèle de pose absent ? lancer "
+                                         f"`python -m computer_vision.pose_analysis --setup` avec internet). Détail : {e}")
+            finally:
+                Path(chemin_tmp_video).unlink(missing_ok=True)
+            st.session_state["analyse_video"] = cache_video
+
+        col_vid1, col_vid2 = st.columns(2)
+        with col_vid1:
+            st.markdown("**Vidéo d'origine**")
+            st.video(octets_video, format=type_video)
+            if type_video != "video/mp4":
+                st.caption("Format MOV/AVI : certains navigateurs ne savent pas le lire. L'analyse, elle, fonctionne.")
+        with col_vid2:
+            st.markdown("**Squelette détecté (images analysées)**")
+            if cache_video["annotee"]:
+                octets_annotes, mime_annote = cache_video["annotee"]
+                st.video(octets_annotes, format=mime_annote, loop=True, autoplay=True, muted=True)
+            elif cache_video["erreur"] is None:
+                st.caption("Vidéo annotée indisponible (aucun encodeur vidéo sur cette machine) : "
+                           "les mesures ci-dessous restent valables.")
+        if cache_video["erreur"]:
+            st.error(cache_video["erreur"])
+        resultat_seq = cache_video["resultat"]
 
         if resultat_seq is not None:
             if resultat_seq["statut"] != "ok":
@@ -654,7 +684,8 @@ with onglet6:
                                       title="Angle du genou au cours du temps", xaxis_title="Temps (s)", yaxis_title="Angle (°)")
                 tracer(fig_seq)
                 st.caption(f"{resultat_seq['n_images']} images analysées sur {resultat_seq['duree_s']} s "
-                           f"({resultat_seq['fps']} images/s). Aucune vidéo n'est conservée sur le disque après l'analyse.")
+                           f"({resultat_seq['fps']} images/s). Aucune vidéo n'est conservée sur le disque : "
+                           "elle reste en mémoire le temps de la session.")
 
 # ONGLET 7 : NATIONAL TEAM DASHBOARD (multi-athlètes)
 with onglet7:
@@ -992,11 +1023,27 @@ with onglet9:
     with i1:
         fichier = st.file_uploader("Importer un journal CSV", type="csv")
         if fichier is not None and st.button("Fusionner ce fichier"):
-            _, rap_import = importer_csv(fichier)
-            st.success(f"{rap_import['lignes_valides']} lignes valides importées "
-                       f"({rap_import['valeurs_hors_plage']} valeurs hors plage ignorées, "
-                       f"{rap_import['doublons_supprimes']} doublons).")
-            st.rerun()
+            try:
+                _, rap_import = importer_csv(fichier)
+            except ValueError as err:
+                rap_import = {"statut": "illisible", "message": str(err)}
+            # Le message est gardé en session : st.rerun() effacerait sinon tout affichage immédiat.
+            st.session_state["rapport_import_journal"] = rap_import
+            if rap_import.get("statut") == "ok":
+                st.rerun()
+        rap = st.session_state.get("rapport_import_journal")
+        if rap:
+            if rap.get("statut") == "ok":
+                st.success(f"{rap['lignes_valides']} ligne(s) importée(s) sur {rap['lignes_recues']} "
+                           f"({rap['valeurs_hors_plage']} valeur(s) hors plage ignorée(s), "
+                           f"{rap['doublons_supprimes']} doublon(s)). Journal : {rap['lignes_totales_journal']} lignes.")
+                for avert in rap.get("avertissements", []):
+                    st.warning(avert)
+            else:
+                st.error(rap["message"])
+                if rap.get("colonnes_fichier"):
+                    st.caption("Colonnes du fichier : " + ", ".join(rap["colonnes_fichier"][:20])
+                               + (" …" if len(rap["colonnes_fichier"]) > 20 else ""))
     with i2:
         st.download_button("Gabarit CSV vide", gabarit_csv(), "gabarit_journal_athena.csv", "text/csv")
         if len(journal):
@@ -1156,6 +1203,121 @@ with onglet10:
     if n2.button("Suivant ▶", disabled=e == len(etapes), key="demo_suiv"):
         st.session_state.etape_demo += 1
         st.rerun()
+
+
+# ONGLET 11 : TEST CSV (épreuve « test du modèle sur données inédites », sans ligne de commande)
+with onglet11:
+    import io
+    from models import testeur_csv as testeur
+
+    st.subheader("Tester le modèle sur un fichier CSV")
+    st.caption("Même moteur que `python -m models.testeur_csv` : association automatique des colonnes "
+               "(français ou anglais, séparateur , ou ;), nettoyage comme en production, verdict de "
+               "compatibilité, puis ROC-AUC avec IC95 si le fichier contient une colonne de blessure.")
+
+    fichier_test = st.file_uploader("Fichier CSV à tester", type=["csv", "txt"], key="csv_test")
+    colonnes_test = []
+    if fichier_test is not None:
+        for enc in ("utf-8-sig", "latin-1"):
+            try:
+                colonnes_test = list(pd.read_csv(io.BytesIO(fichier_test.getvalue()), sep=None,
+                                                 engine="python", encoding=enc, nrows=5).columns)
+                break
+            except Exception:  # noqa: BLE001 - encodage suivant
+                continue
+    AUTO = "Détection automatique"
+    cible_choisie = st.selectbox("Colonne de blessure (étiquette 0/1, oui/non…)", [AUTO] + colonnes_test,
+                                 help="Laisser en détection automatique sauf si la colonne n'est pas reconnue.")
+    b1, b2, _ = st.columns([1, 1.4, 2])
+    lancer_test = b1.button("Lancer le test", disabled=fichier_test is None)
+    lancer_repetition = b2.button("Répétition : jeu inédit simulé")
+
+    if lancer_test or lancer_repetition:
+        dossier_tmp = Path(tempfile.mkdtemp(prefix="athena_csv_"))
+        if lancer_repetition:
+            chemin_test = testeur.jeu_de_repetition(dossier_tmp)
+            nom_test, cible_test = "Jeu de répétition simulé (3 000 profils, colonnes en anglais)", None
+        else:
+            chemin_test = dossier_tmp / Path(fichier_test.name).name
+            chemin_test.write_bytes(fichier_test.getvalue())
+            nom_test, cible_test = fichier_test.name, (None if cible_choisie == AUTO else cible_choisie)
+        with st.spinner("Analyse du fichier en cours…"):
+            try:
+                res_test = testeur.analyser(chemin_test, cible=cible_test)
+                predictions = res_test.pop("_predictions")
+                res_test.pop("_y", None)
+                st.session_state["resultat_test_csv"] = {
+                    "nom": nom_test, "res": res_test, "rapport": testeur.rapport_md(res_test),
+                    # Les scores d'ATHÉNA d'abord, puis les colonnes du fichier.
+                    "apercu": predictions[[c for c in predictions.columns if str(c).startswith("athena_")]
+                                          + [c for c in predictions.columns if not str(c).startswith("athena_")]].head(50),
+                    "predictions": predictions.to_csv(index=False).encode("utf-8"),
+                }
+            except (ValueError, FileNotFoundError) as err:
+                st.session_state["resultat_test_csv"] = {"nom": nom_test, "erreur": str(err)}
+            finally:
+                chemin_test.unlink(missing_ok=True)
+
+    r_test = st.session_state.get("resultat_test_csv")
+    if r_test:
+        st.markdown(f"#### Résultat : {r_test['nom']}")
+        if "erreur" in r_test:
+            st.error(r_test["erreur"])
+        else:
+            res_t = r_test["res"]
+            verdict = res_t["verdict"]
+            message = (f"Fichier **{verdict['statut'].upper()}** · {res_t['lignes']:,} lignes · "
+                       f"{res_t['variables_mesurees']}/10 variables du modèle trouvées").replace(",", " ")
+            {"compatible": st.success, "partiel": st.warning, "incompatible": st.error}[verdict["statut"]](message)
+            for raison in verdict["raisons"]:
+                st.markdown(f"- {raison}")
+            if verdict["statut"] == "incompatible":
+                st.info("Les scores sont calculés pour la transparence, mais ils ne doivent pas être interprétés : "
+                        "sans les variables clés, le modèle n'a presque rien sur quoi s'appuyer. Un fichier de "
+                        "résultats sportifs (médailles, palmarès) ne décrit ni la charge, ni le sommeil, ni les blessures.")
+
+            if "production" in res_t:
+                p = res_t["production"]
+                st.markdown(f"**Risque de blessure** (étiquette : « {res_t['colonne_etiquette']} »)")
+                if "auc" in p:
+                    m1, m2, m3, m4 = st.columns(4)
+                    m1.metric("ROC-AUC", f"{p['auc']:.3f}", help=f"IC95 bootstrap [{p['ic95'][0]:.3f} ; {p['ic95'][1]:.3f}]")
+                    m2.metric("IC95", f"[{p['ic95'][0]:.3f} ; {p['ic95'][1]:.3f}]")
+                    m3.metric("Rappel, 20 % les plus à risque", f"{p['top20pct']['rappel']:.0%}",
+                              help=f"{p['top20pct']['lift']}× mieux que le hasard")
+                    m4.metric("Brier (proba corrigée)", f"{p['brier_proba_corrigee']:.4f}",
+                              help=f"Référence constante : {p['brier_constante']:.4f}")
+                    st.caption(f"n = {p['n']} · prévalence {p['prevalence']:.1%} · AUC = 0,5 : hasard, 1 : parfait.")
+                if "avertissement" in p:
+                    st.warning(p["avertissement"])
+            else:
+                st.info("Pas de colonne de blessure détectée : prédictions seules, pas de métrique. "
+                        "Choisir la colonne dans la liste ci-dessus si elle existe sous un autre nom.")
+            if "fatigue" in res_t and "mae" in res_t["fatigue"]:
+                f_ = res_t["fatigue"]
+                st.markdown(f"**Fatigue** (colonne « {res_t['colonne_fatigue']} ») : MAE {f_['mae']:.3f} · "
+                            f"RMSE {f_['rmse']:.3f} · R² {f_['r2']:.3f} (n = {f_['n']})")
+            for avert in res_t["avertissements"]:
+                st.caption(f"Remarque : {avert}")
+
+            with st.expander("Correspondance des colonnes et qualité des données"):
+                lignes_corr = []
+                for feat in testeur.FEATURE_NAMES:
+                    a = res_t["correspondance"][feat]
+                    q = res_t["qualite"][feat]
+                    lignes_corr.append({
+                        "Variable du modèle": testeur.LABELS_LISIBLES[feat], "Colonne du fichier": a["colonne"] or "absente",
+                        "Méthode": a["methode"], "Manquantes": q["manquantes"],
+                        "Hors domaine (bornées)": q["sous_domaine"] + q["sur_domaine"],
+                    })
+                _pleine_largeur(st.dataframe, pd.DataFrame(lignes_corr), hide_index=True)
+            st.markdown("**Aperçu des prédictions** (50 premières lignes)")
+            tableau(r_test["apercu"])
+            t1, t2, _ = st.columns([1, 1, 2])
+            t1.download_button("Télécharger les prédictions (CSV)", r_test["predictions"],
+                               "athena_predictions.csv", "text/csv")
+            t2.download_button("Télécharger le rapport (Markdown)", r_test["rapport"].encode("utf-8"),
+                               "athena_rapport_test.md", "text/markdown")
 
 
 # PIED DE PAGE

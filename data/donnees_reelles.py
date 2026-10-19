@@ -78,6 +78,12 @@ def preparer_journal(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     df = df[df["athlete_id"].ne("") & df["athlete_id"].ne("nan")]
 
     for col, (lo, hi) in PLAGES.items():
+        if not pd.api.types.is_numeric_dtype(df[col]):
+            # Export Excel français : « 7,5 » -> 7.5 ; « oui »/« non » acceptés pour la blessure.
+            texte = df[col].astype(str).str.strip().str.replace(",", ".", regex=False).str.lower()
+            if col == "blessure":
+                texte = texte.replace({"oui": "1", "non": "0", "yes": "1", "no": "0", "true": "1", "false": "0"})
+            df[col] = texte
         df[col] = pd.to_numeric(df[col], errors="coerce")
         hors = df[col].notna() & ((df[col] < lo) | (df[col] > hi))
         rapport["valeurs_hors_plage"] += int(hors.sum())
@@ -106,13 +112,97 @@ def ajouter_entree(entree: dict) -> pd.DataFrame:
     return fusion
 
 
+# Noms acceptés pour chaque colonne du journal (normalisés : minuscules, sans accents,
+# séparateurs -> « _ »), pour lire un export Excel ou un fichier en anglais sans retouche.
+SYNONYMES_JOURNAL = {
+    "athlete_id": ["athlete_id", "id_athlete", "athlete", "id", "joueur", "player", "player_id", "code_athlete"],
+    "date": ["date", "jour", "day", "date_seance", "session_date"],
+    "rpe": ["rpe", "effort", "effort_percu", "perceived_exertion", "rpe_0_10"],
+    "duree_min": ["duree_min", "duree", "duree_seance", "duration", "duration_min", "minutes", "temps_min"],
+    "sommeil_h": ["sommeil_h", "sommeil", "heures_sommeil", "sleep", "sleep_h", "sleep_hours"],
+    "fc_repos": ["fc_repos", "fc_reveil", "fc_au_repos", "resting_hr", "resting_heart_rate", "rhr"],
+    "poids_kg": ["poids_kg", "poids", "weight", "weight_kg", "masse"],
+    "douleur": ["douleur", "courbatures", "pain", "soreness"],
+    "blessure": ["blessure", "blesse", "injury", "injured", "is_injured"],
+}
+COLONNES_OBLIGATOIRES = ["athlete_id", "date"]
+
+
+def _norm_nom(s) -> str:
+    import re
+    import unicodedata
+    s = unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode().lower()
+    return re.sub(r"[^a-z0-9]+", "_", s).strip("_")
+
+
+def lire_csv_robuste(contenu) -> pd.DataFrame:
+    """Lit un CSV quel que soit le séparateur (, ; tabulation) et l'encodage (UTF-8, Excel/Latin-1)."""
+    derniere = None
+    for enc in ("utf-8-sig", "latin-1"):
+        try:
+            if hasattr(contenu, "seek"):
+                contenu.seek(0)
+            df = pd.read_csv(contenu, sep=None, engine="python", encoding=enc)
+            if df.shape[1] >= 2:
+                return df
+        except Exception as e:  # noqa: BLE001 - on tente l'encodage suivant
+            derniere = e
+    raise ValueError(f"Lecture du fichier impossible : ce n'est pas un CSV lisible ({derniere}).")
+
+
+def reconnaitre_colonnes(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+    """Renomme les colonnes reconnues vers le format du journal. Retourne (df, {colonne_journal: colonne_source})."""
+    normalisees = {_norm_nom(c): c for c in df.columns}
+    trouvees = {}
+    for cible, synonymes in SYNONYMES_JOURNAL.items():
+        for syn in synonymes:
+            if syn in normalisees and normalisees[syn] not in trouvees.values():
+                trouvees[cible] = normalisees[syn]
+                break
+    return df.rename(columns={src: cible for cible, src in trouvees.items()}), trouvees
+
+
 def importer_csv(contenu) -> tuple[pd.DataFrame, dict]:
-    """Fusionne un CSV (chemin ou fichier uploadé) au journal existant."""
-    brut = pd.read_csv(contenu)
-    nouveau, rapport = preparer_journal(brut)
-    fusion, _ = preparer_journal(pd.concat([charger_journal(), nouveau], ignore_index=True))
+    """Fusionne un CSV (chemin ou fichier uploadé) au journal existant.
+
+    Ne modifie JAMAIS le journal si le fichier est incompatible ou ne contient aucune ligne
+    valide. `rapport["statut"]` vaut "ok", "incompatible" ou "vide", avec un message clair."""
+    actuel = charger_journal()
+    brut = lire_csv_robuste(contenu)
+    renomme, trouvees = reconnaitre_colonnes(brut)
+    rapport = {"colonnes_fichier": [str(c) for c in brut.columns], "colonnes_reconnues": trouvees,
+               "lignes_recues": int(len(brut))}
+
+    manquantes = [c for c in COLONNES_OBLIGATOIRES if c not in trouvees]
+    if manquantes:
+        rapport.update(statut="incompatible", lignes_valides=0, lignes_totales_journal=int(len(actuel)),
+                       message=("Ce fichier n'est pas un journal d'entraînement : colonne(s) obligatoire(s) "
+                                f"introuvable(s) : {', '.join(manquantes)}. Un journal donne, pour chaque athlète "
+                                "et chaque jour, l'effort, la durée, le sommeil et les blessures (voir le gabarit). "
+                                "Pour tester le modèle sur un jeu de données, utiliser l'onglet « Test CSV »."))
+        return actuel, rapport
+
+    nouveau, rapport_prep = preparer_journal(renomme)
+    rapport.update(rapport_prep)
+    if rapport["lignes_valides"] == 0:
+        rapport.update(statut="vide", lignes_totales_journal=int(len(actuel)),
+                       message=(f"Aucune ligne valide sur {rapport['lignes_recues']} : "
+                                f"{rapport['dates_invalides']} date(s) illisible(s) (format attendu AAAA-MM-JJ). "
+                                "Le journal n'a pas été modifié."))
+        return actuel, rapport
+
+    fusion, _ = preparer_journal(pd.concat([actuel, nouveau], ignore_index=True))
     fusion.to_csv(CHEMIN_JOURNAL, index=False)
     rapport["lignes_totales_journal"] = int(len(fusion))
+    rapport["statut"] = "ok"
+    sans_charge = [c for c in ("rpe", "duree_min") if c not in trouvees]
+    rapport["avertissements"] = []
+    if sans_charge:
+        rapport["avertissements"].append("Colonne(s) absente(s) : " + ", ".join(sans_charge)
+                                         + " : la charge d'entraînement (RPE × durée) ne peut pas être calculée.")
+    if "blessure" not in trouvees:
+        rapport["avertissements"].append("Pas de colonne « blessure » : le risque sera calculé, mais la "
+                                         "performance du modèle ne pourra pas être évaluée sur ces données.")
     return fusion, rapport
 
 

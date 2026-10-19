@@ -30,21 +30,41 @@ DETECTION_MIN = 0.5     # en dessous de 50 % d'images détectées, on refuse de 
 
 # --------------------------------------------------------------- extraction ----
 
+LARGEUR_ANALYSE = 960   # px : assez pour la pose, et 150 images 1080p ne saturent plus la mémoire (~1 Go -> ~250 Mo)
+
+
+def _redimensionner(frame, largeur_max: int):
+    """Réduit l'image si elle est plus large que largeur_max (dimensions paires, utiles aux encodeurs vidéo)."""
+    import cv2
+    h, w = frame.shape[:2]
+    if w <= largeur_max and w % 2 == 0 and h % 2 == 0:
+        return frame
+    echelle = min(1.0, largeur_max / w)
+    nw, nh = int(w * echelle) // 2 * 2, int(h * echelle) // 2 * 2
+    return cv2.resize(frame, (nw, nh), interpolation=cv2.INTER_AREA)
+
+
+def _pas_echantillonnage(fps_source: float, fps_cible: float) -> int:
+    return max(1, int(round((fps_source or 30.0) / fps_cible)))
+
+
 def lire_frames(chemin_video: str | Path, fps_cible: float = 10.0, max_frames: int = 150):
-    """Lit une vidéo en sous-échantillonnant à ~fps_cible. Retourne (frames_bgr, fps_effectif)."""
+    """Lit une vidéo en sous-échantillonnant à ~fps_cible. Retourne (frames_bgr, fps_effectif).
+    Les images sont réduites à LARGEUR_ANALYSE px : les points de pose sont en coordonnées
+    relatives (0-1), donc la mesure des angles n'en dépend pas."""
     import cv2
     cap = cv2.VideoCapture(str(chemin_video))
     if not cap.isOpened():
         raise ValueError("Vidéo illisible ou format non pris en charge.")
     fps_source = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    pas = max(1, int(round(fps_source / fps_cible)))
+    pas = _pas_echantillonnage(fps_source, fps_cible)
     frames, i = [], 0
     while len(frames) < max_frames:
         ok, frame = cap.read()
         if not ok:
             break
         if i % pas == 0:
-            frames.append(frame)
+            frames.append(_redimensionner(frame, LARGEUR_ANALYSE))
         i += 1
     cap.release()
     if len(frames) < 5:
@@ -249,6 +269,59 @@ def analyser_series(serie: pd.DataFrame, fps: float, mouvement: str = "Course à
         "score_technique": round(score, 1), "niveau": niveau, "explications": explications,
         "serie_lissee": s,
     }
+
+
+def generer_video_annotee(chemin_video: str | Path, landmarks_par_image: list, fps_cible: float = 10.0,
+                          max_frames: int = 150, largeur_max: int = 640):
+    """Vidéo de contrôle : les images analysées, avec le squelette détecté dessiné dessus.
+
+    Même échantillonnage que lire_frames, donc l'image k correspond aux landmarks k.
+    Format WebM/VP8 (lisible par Chrome, Edge, Firefox), sinon MP4/H.264.
+    Retourne (octets, type_mime), ou None si aucun encodeur n'est disponible."""
+    import tempfile
+    import cv2
+    from computer_vision.pose_analysis import dessiner_squelette
+
+    cap = cv2.VideoCapture(str(chemin_video))
+    if not cap.isOpened():
+        return None
+    fps_source = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    pas = _pas_echantillonnage(fps_source, fps_cible)
+    dossier = Path(tempfile.mkdtemp(prefix="athena_video_"))
+    writer, sortie, mime = None, None, None
+    k, i = 0, 0
+    try:
+        while k < min(max_frames, len(landmarks_par_image)):
+            ok, frame = cap.read()
+            if not ok:
+                break
+            if i % pas == 0:
+                frame = _redimensionner(frame, largeur_max)
+                if landmarks_par_image[k] is not None:
+                    frame = dessiner_squelette(frame, landmarks_par_image[k])
+                if writer is None:
+                    h, w = frame.shape[:2]
+                    for fourcc, ext, type_mime in (("VP80", ".webm", "video/webm"), ("avc1", ".mp4", "video/mp4")):
+                        chemin = dossier / f"annotee{ext}"
+                        essai = cv2.VideoWriter(str(chemin), cv2.VideoWriter_fourcc(*fourcc), fps_source / pas, (w, h))
+                        if essai.isOpened():
+                            writer, sortie, mime = essai, chemin, type_mime
+                            break
+                        essai.release()
+                    if writer is None:
+                        return None
+                writer.write(frame)
+                k += 1
+            i += 1
+    finally:
+        cap.release()
+        if writer is not None:
+            writer.release()
+    if sortie is None or not sortie.exists() or sortie.stat().st_size == 0:
+        return None
+    octets = sortie.read_bytes()
+    sortie.unlink(missing_ok=True)
+    return octets, mime
 
 
 def analyser_video(chemin_video: str | Path, mouvement: str = "Course à pied",
