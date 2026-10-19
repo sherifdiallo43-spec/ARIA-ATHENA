@@ -234,28 +234,33 @@ with onglet1:
     st.session_state.simulation_active = demarrer
 
     def afficher_etat_vital(vitals: dict):
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("FC (bpm)", vitals["fc"])
-        c2.metric("SpO2 (%)", vitals["spo2"])
-        c3.metric("Température (°C)", vitals["temperature"])
-        c4.metric("Lactate (mmol/L)", vitals["lactate"])
-        c5.metric("Glucose (mg/dL)", vitals["glucose"])
+        # Conteneur "vitaux" : style compact propre au Monitoring (voir .st-key-vitaux dans theme.py)
+        with st.container(key="vitaux"):
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.metric("FC (bpm)", vitals["fc"])
+            c2.metric("SpO2 (%)", vitals["spo2"])
+            c3.metric("Température (°C)", vitals["temperature"])
+            c4.metric("Lactate (mmol/L)", vitals["lactate"])
+            c5.metric("Glucose (mg/dL)", vitals["glucose"])
 
         signal_ecg = generer_signal_ecg(hr_bpm=vitals["fc"], duree_s=2.5)
         temps_axe = np.linspace(0, 2.5, len(signal_ecg))
         fig_ecg = go.Figure()
         fig_ecg.add_trace(go.Scatter(x=temps_axe, y=signal_ecg, mode="lines",
-                                      line=dict(color="#1B6E8C", width=2), name="ECG"))
+                                      line=dict(color=PALETTE["accent"], width=2), name="ECG"))
         fig_ecg.update_layout(title="Tracé ECG synthétique", template=MODELE_PLOTLY,
-                               paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", height=320,
+                               paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", height=240,
                                margin=dict(l=20, r=20, t=40, b=20), xaxis_title="Temps (s)", yaxis_title="Amplitude (mV)")
         tracer(fig_ecg)
 
         if len(st.session_state.historique_vitals) > 1:
-            df_hist = pd.DataFrame(list(st.session_state.historique_vitals))
-            fig_hist = px.line(df_hist, x="horodatage", y=["fc", "spo2"], template=MODELE_PLOTLY,
-                                title="Historique récent — FC & SpO2")
-            fig_hist.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", height=280)
+            df_hist = (pd.DataFrame(list(st.session_state.historique_vitals))
+                       .rename(columns={"fc": "FC (bpm)", "spo2": "SpO2 (%)"}))
+            fig_hist = px.line(df_hist, x="horodatage", y=["FC (bpm)", "SpO2 (%)"], template=MODELE_PLOTLY,
+                                title="Historique récent : FC et SpO2",
+                                labels={"horodatage": "Heure", "value": "", "variable": ""})
+            fig_hist.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", height=240,
+                                   margin=dict(l=20, r=20, t=40, b=20))
             tracer(fig_hist)
 
     @st.fragment(run_every=intervalle_rafraichissement if st.session_state.simulation_active else None)

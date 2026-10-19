@@ -60,6 +60,15 @@ else:
     noter("AVERT", "Modèle de pose ABSENT : lancer UNE FOIS avec internet "
                    "`python -m computer_vision.pose_analysis --setup`, sinon l'analyse vidéo échouera hors-ligne")
 
+# Polices et logo servis en local (dashboard/static + .streamlit/config.toml)
+statique = RACINE / "dashboard" / "static"
+polices = list((statique / "fonts").glob("*.woff2"))
+if len(polices) >= 7 and (statique / "logo_guindy.png").exists() and (RACINE / ".streamlit" / "config.toml").exists():
+    noter("OK", f"Polices ({len(polices)} fichiers) et logo présents en local (affichage identique sans internet)")
+else:
+    noter("AVERT", "Polices ou logo absents de dashboard/static (ou .streamlit/config.toml manquant) : "
+                   "l'app s'affichera avec la police par défaut et sans logo")
+
 # 4. Suites de tests
 for mod in ["models.test_robustesse", "models.test_donnees_reelles", "models.test_sequence", "models.test_demo", "models.test_testeur_csv"]:
     if not (RACINE / (mod.replace(".", "/") + ".py")).exists():

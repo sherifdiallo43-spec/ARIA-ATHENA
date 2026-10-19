@@ -1,11 +1,56 @@
 # Thème Streamlit d'ATHÉNA : couleur d'accent unique (bleu pétrole) à la place
 # du rouge par défaut, appliquée aux curseurs, boutons radio, onglets et liens.
+#
+# Polices hébergées avec l'application (dashboard/static/fonts, licence SIL OFL) :
+# aucun appel réseau, l'affichage reste identique sans wifi le jour de la démo.
+#   - Inter : texte et chiffres (très lisible à l'écran)
+#   - Montserrat : titres
+[server]
+enableStaticServing = true
+
 [theme]
 base = "light"
 primaryColor = "#1B6E8C"
 backgroundColor = "#F4F7F9"
 secondaryBackgroundColor = "#FFFFFF"
 textColor = "#1F2937"
+font = "Inter, sans-serif"
+headingFont = "Montserrat, Inter, sans-serif"
+
+[[theme.fontFaces]]
+family = "Inter"
+url = "app/static/fonts/inter-400.woff2"
+weight = "400"
+
+[[theme.fontFaces]]
+family = "Inter"
+url = "app/static/fonts/inter-500.woff2"
+weight = "500"
+
+[[theme.fontFaces]]
+family = "Inter"
+url = "app/static/fonts/inter-600.woff2"
+weight = "600"
+
+[[theme.fontFaces]]
+family = "Inter"
+url = "app/static/fonts/inter-700.woff2"
+weight = "700"
+
+[[theme.fontFaces]]
+family = "Montserrat"
+url = "app/static/fonts/montserrat-600.woff2"
+weight = "600"
+
+[[theme.fontFaces]]
+family = "Montserrat"
+url = "app/static/fonts/montserrat-700.woff2"
+weight = "700"
+
+[[theme.fontFaces]]
+family = "Montserrat"
+url = "app/static/fonts/montserrat-800.woff2"
+weight = "800"
 
 [browser]
 gatherUsageStats = false

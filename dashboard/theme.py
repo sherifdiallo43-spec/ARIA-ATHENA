@@ -2,8 +2,9 @@
 # Identité visuelle du tableau de bord : palette, CSS, modèle Plotly, en-tête.
 # Tout le style est regroupé ici pour que app.py ne contienne que la logique.
 #
-# Police : celle intégrée à Streamlit (aucun chargement réseau, la démo marche
-# hors-ligne).
+# Polices : Inter (texte, chiffres) et Montserrat (titres), hébergées dans
+# dashboard/static/fonts et déclarées dans .streamlit/config.toml : aucun
+# chargement réseau, la démo marche hors-ligne.
 # Choix de conception : thème clair à fort contraste, pensé pour la projection
 # en salle (un fond sombre devient gris délavé sur un vidéoprojecteur). Une
 # seule couleur d'accent (bleu pétrole) ; le vert / ambre / rouge sont réservés
@@ -35,7 +36,7 @@ COULEURS_SERIES = ["#1B6E8C", "#E07B39", "#0F2A3D", "#5B9BB0", "#8E6CC0", "#7A8B
 # Modèle Plotly appliqué par-dessus "plotly_white" : police, couleurs, marges.
 pio.templates["athena"] = go.layout.Template(
     layout=dict(
-        font=dict(family='"Source Sans Pro", "Source Sans 3", sans-serif', size=13, color=PALETTE["texte"]),
+        font=dict(family="Inter, sans-serif", size=13, color=PALETTE["texte"]),
         title=dict(font=dict(size=15, color=PALETTE["encre"]), x=0, xanchor="left"),
         colorway=COULEURS_SERIES,
         paper_bgcolor="rgba(0,0,0,0)",
@@ -43,7 +44,7 @@ pio.templates["athena"] = go.layout.Template(
         xaxis=dict(gridcolor="#EDF1F4", linecolor=PALETTE["bordure"], zeroline=False),
         yaxis=dict(gridcolor="#EDF1F4", linecolor=PALETTE["bordure"], zeroline=False),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        hoverlabel=dict(font=dict(family='"Source Sans Pro", "Source Sans 3", sans-serif')),
+        hoverlabel=dict(font=dict(family="Inter, sans-serif")),
     )
 )
 MODELE_PLOTLY = "plotly_white+athena"
@@ -79,11 +80,11 @@ def injecter_theme():
         /* --- Barre latérale --- */
         section[data-testid="stSidebar"] {{ background: {p['carte']}; border-right: 1px solid {p['bordure']}; }}
         section[data-testid="stSidebar"] h3 {{
-            font-size: 0.72rem !important; text-transform: uppercase; letter-spacing: 0.12em;
+            font-size: 0.7rem !important; text-transform: uppercase; letter-spacing: 0.07em;
             color: {p['texte_doux']} !important; margin-top: 0.6rem;
         }}
         .marque {{ padding: 4px 0 14px 0; border-bottom: 1px solid {p['bordure']}; margin-bottom: 6px; }}
-        .marque-nom {{ font-size: 1.45rem; font-weight: 800; color: {p['encre']}; letter-spacing: 0.04em; }}
+        .marque-nom {{ font-family: Montserrat, Inter, sans-serif; font-size: 1.45rem; font-weight: 800; color: {p['encre']}; letter-spacing: 0.04em; }}
         .marque-nom span {{ color: {p['accent']}; }}
         .marque-sous {{ font-size: 0.72rem; color: {p['texte_doux']}; letter-spacing: 0.1em; text-transform: uppercase; }}
 
@@ -93,7 +94,7 @@ def injecter_theme():
             border-radius: 14px; padding: 20px 26px; margin-bottom: 14px; color: #FFFFFF;
             display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap;
         }}
-        .entete-titre {{ font-size: 1.55rem; font-weight: 800; letter-spacing: 0.02em; line-height: 1.2; }}
+        .entete-titre {{ font-family: Montserrat, Inter, sans-serif; font-size: 1.5rem; font-weight: 800; letter-spacing: 0.02em; line-height: 1.2; }}
         .entete-sous {{ font-size: 0.85rem; opacity: 0.82; margin-top: 4px; }}
         .entete-droite {{ display: flex; gap: 10px; align-items: stretch; flex-wrap: wrap; }}
         .entete-bloc {{
@@ -116,7 +117,17 @@ def injecter_theme():
             border-radius: 10px; padding: 12px 14px; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
         }}
         div[data-testid="stMetricLabel"] {{ color: {p['texte_doux']} !important; font-weight: 600; }}
-        div[data-testid="stMetricValue"] {{ color: {p['encre']} !important; font-weight: 700; }}
+        div[data-testid="stMetricLabel"] p {{ font-size: 0.82rem !important; }}
+        div[data-testid="stMetricValue"], div[data-testid="stMetricValue"] > div {{
+            color: {p['encre']} !important; font-weight: 700; font-size: 1.5rem !important;
+            line-height: 1.3; font-variant-numeric: tabular-nums;
+        }}
+
+        /* --- Monitoring : constantes vitales compactes --- */
+        .st-key-vitaux div[data-testid="stMetric"] {{ padding: 8px 12px; }}
+        .st-key-vitaux div[data-testid="stMetricLabel"] p {{ font-size: 0.74rem !important; }}
+        .st-key-vitaux div[data-testid="stMetricValue"],
+        .st-key-vitaux div[data-testid="stMetricValue"] > div {{ font-size: 1.15rem !important; line-height: 1.25; }}
 
         /* --- Boutons --- */
         .stButton>button, .stDownloadButton>button, .stFormSubmitButton>button {{
@@ -133,7 +144,7 @@ def injecter_theme():
             padding: 18px 16px; text-align: center; box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
             border-top: 4px solid var(--kpi-couleur, {p['accent']});
         }}
-        .kpi-value {{ font-size: 2.1rem; font-weight: 800; color: var(--kpi-couleur, {p['encre']}); line-height: 1.1; }}
+        .kpi-value {{ font-size: 1.9rem; font-weight: 800; font-variant-numeric: tabular-nums; color: var(--kpi-couleur, {p['encre']}); line-height: 1.1; }}
         .kpi-label {{ color: {p['texte_doux']}; font-size: 0.74rem; letter-spacing: 0.08em;
                       text-transform: uppercase; font-weight: 600; margin-top: 6px; }}
 
@@ -156,7 +167,13 @@ def injecter_theme():
 
         /* --- Pied de page --- */
         .pied {{ text-align: center; color: {p['texte_doux']}; font-size: 0.74rem; letter-spacing: 0.04em;
-                 border-top: 1px solid {p['bordure']}; padding-top: 14px; margin-top: 24px; line-height: 1.7; }}
+                 border-top: 1px solid {p['bordure']}; padding-top: 18px; margin-top: 28px; line-height: 1.7; }}
+        .pied-partenaire {{ display: flex; flex-direction: column; align-items: center; gap: 8px; margin-bottom: 14px; }}
+        .pied-partenaire-label {{ font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.14em; font-weight: 600; }}
+        .pied-partenaire img {{
+            height: 110px; width: auto; background: #FFFFFF; border: 1px solid {p['bordure']};
+            border-radius: 12px; padding: 6px; box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+        }}
         </style>
         """,
         unsafe_allow_html=True,
@@ -224,8 +241,14 @@ def carte_alerte(niveau: str, titre: str, texte: str):
 
 
 def pied_de_page():
+    # Logo servi en local par Streamlit (dashboard/static, server.enableStaticServing).
     st.markdown(
-        """<div class="pied">ATHÉNA v2 · Plateforme IA sportive prédictive · ARiA Tech<br>
+        """<div class="pied">
+        <div class="pied-partenaire">
+          <div class="pied-partenaire-label">Partenaire</div>
+          <img src="app/static/logo_guindy.png" alt="Guindy Technology, Smart IT Services">
+        </div>
+        ATHÉNA v2 · Plateforme IA sportive prédictive · ARiA Tech<br>
         Pan-African Robotics Competition 2026 · Ligue Intelligence Artificielle<br>
         Prototype d'aide à la décision sur données simulées, sans prétention diagnostique</div>""",
         unsafe_allow_html=True,
