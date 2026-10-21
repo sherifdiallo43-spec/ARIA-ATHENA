@@ -33,7 +33,9 @@ athena/
 ## Installation & lancement
 
 ```bash
-cd athena
+# Se placer dans le dossier du projet :
+#   archive zip : cd ATHENA        clone GitHub : cd ARIA-ATHENA
+cd ATHENA
 python3 -m venv venv
 source venv/bin/activate          # Windows : venv\Scripts\activate
 pip install -r requirements.txt
@@ -41,6 +43,8 @@ pip install -r requirements.txt
 # Une seule fois, avec internet : télécharge le modèle de détection posturale
 # en local pour que le dashboard n'ait plus besoin de réseau ensuite (utile
 # le jour de la démo si le wifi de la salle n'est pas fiable).
+# Inutile si computer_vision/artifacts/pose_landmarker_lite.task est déjà présent
+# (c'est le cas dans l'archive zip remise au jury).
 python -m computer_vision.pose_analysis --setup
 
 streamlit run dashboard/app.py
