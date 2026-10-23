@@ -107,6 +107,32 @@ def main():
         verif("vidéo annotée produite et relisible", annotee is not None and relues == len(frames_hd),
               f"({annotee[1] if annotee else 'aucune'}, {relues} images)")
 
+        # Horodatages strictement croissants (exigés par le mode VIDÉO de MediaPipe), images sautées sans décodage
+        from computer_vision.analyse_sequence import _iterer_images
+        temps = [t for _, t, _ in _iterer_images(chemin, 10, 150)]
+        verif("horodatages croissants pour le mode vidéo", len(temps) >= 25 and all(b > a for a, b in zip(temps, temps[1:])),
+              f"({len(temps)} images, {temps[0]:.0f} -> {temps[-1]:.0f} ms)")
+
+    # Tracé du squelette : épaisseur proportionnelle à l'image, points mal vus jamais dessinés
+    from computer_vision.pose_analysis import dessiner_squelette, Point
+    pose = [Point(0.5, 0.5, 0.0)] * 33
+    for idx, (x, y) in {11: (0.45, 0.3), 23: (0.45, 0.55), 25: (0.47, 0.75), 27: (0.45, 0.95),
+                        12: (0.55, 0.3), 24: (0.55, 0.55), 26: (0.53, 0.75), 28: (0.55, 0.95)}.items():
+        pose[idx] = Point(x, y, 0.95)
+    pose[28] = Point(0.55, 0.95, 0.1)                   # cheville droite cachée
+    def pixels_traces(taille):
+        fond = np.zeros((taille, taille, 3), dtype=np.uint8)
+        return int((dessiner_squelette(fond, pose, "Course à pied").max(axis=2) > 0).sum()), fond
+    petit, _ = pixels_traces(400)
+    grand, _ = pixels_traces(2000)
+    # Image 5 fois plus grande : un trait d'épaisseur FIXE donnerait ~5 fois plus de pixels, un trait
+    # proportionnel bien plus (longueur ET épaisseur multipliées).
+    verif("trait proportionnel à la taille de l'image", grand > 8 * petit, f"({petit} px -> {grand} px)")
+    fond = np.zeros((400, 400, 3), dtype=np.uint8)
+    img = dessiner_squelette(fond, pose)
+    autour_cheville = img[370:390, 210:230].max()        # cheville droite cachée (0,55 ; 0,95)
+    verif("point peu visible non dessiné", autour_cheville == 0)
+
     print("\nTous les tests passent." if ok else "\nDes tests ont échoué.")
     sys.exit(0 if ok else 1)
 

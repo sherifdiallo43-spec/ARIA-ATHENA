@@ -1,5 +1,7 @@
 # Tests de l'outil de test en direct (models/testeur_csv.py). Lancement : python -m models.test_testeur_csv
+import atexit
 import json
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -12,7 +14,9 @@ from . import testeur_csv as T
 
 
 def _tmp() -> Path:
-    return Path(tempfile.mkdtemp(prefix="athena_test_"))
+    d = Path(tempfile.mkdtemp(prefix="athena_test_"))
+    atexit.register(shutil.rmtree, d, ignore_errors=True)   # pas de dossiers laissés dans %TEMP%
+    return d
 
 
 def test_repetition_generale():
@@ -158,6 +162,44 @@ def test_verdict_et_imc_calcule():
     v = T.analyser(d / "hors.csv")["verdict"]
     assert v["statut"] == "partiel" and "age" in v["hors_domaine"], v
     print("[OK] verdict incompatible / compatible / partiel, IMC calculé depuis poids et taille")
+
+
+def test_unites_converties():
+    # Sommeil en minutes, intensité sur 10, bilan calorique (mangé - besoin) : convertis et annoncés.
+    d = _tmp()
+    X, y, _ = _generer_dataset(n=800, graine=21)
+    df =pd.DataFrame(X, columns=FEATURE_NAMES)
+    df["blessure"] = y
+    df.to_csv(d / "ref.csv", index=False)
+    auc_ref = T.analyser(d / "ref.csv", n_boot=50)["production"]["auc"]
+    autre = df.rename(columns={"sommeil_h": "sleep_minutes_x", "intensite_moyenne_7j": "intensity",
+                               "deficit_calorique_pct": "calorie_balance"})
+    autre["sleep_minutes_x"] = autre["sleep_minutes_x"] * 60
+    autre["intensity"] = autre["intensity"] * 10
+    autre["calorie_balance"] = -autre["calorie_balance"]
+    autre.to_csv(d / "unites.csv", index=False)
+    res = T.analyser(d / "unites.csv", mapping={"sommeil_h": "sleep_minutes_x"}, n_boot=50)
+    texte = " ".join(res["avertissements"])
+    assert "minutes" in texte and "0-10" in texte and "signe inversé" in texte, res["avertissements"]
+    assert abs(res["production"]["auc"] - auc_ref) < 1e-9, (res["production"]["auc"], auc_ref)
+    assert res["qualite"]["sommeil_h"]["sur_domaine"] == 0
+    print(f"[OK] unités converties (minutes, échelle 0-10, bilan calorique) : même AUC {auc_ref}")
+
+
+def test_etiquette_comptage_et_colonne_illisible():
+    d = _tmp()
+    X, y, _ = _generer_dataset(n=600, graine=31)
+    df = pd.DataFrame(X, columns=FEATURE_NAMES)
+    rng = np.random.default_rng(0)
+    df["nb_blessures_saison"] = np.where(y == 1, rng.integers(1, 4, len(y)), 0)   # 0, 1, 2, 3
+    df["sommeil_h"] = "7h30"                                                       # illisible
+    df.to_csv(d / "compte.csv", index=False)
+    res = T.analyser(d / "compte.csv", cible="nb_blessures_saison", n_boot=50)
+    assert "auc" in res["production"], res["production"]
+    assert any("> 0" in a for a in res["avertissements"]), res["avertissements"]
+    v = res["verdict"]
+    assert "sommeil_h" in v["colonnes_vides"] and "sommeil_h" not in v["variables_cles_presentes"], v
+    print(f"[OK] étiquette 0/1/2/3 lue comme blessure (> 0), colonne « 7h30 » comptée absente ({v['statut']})")
 
 
 def test_rapport_console_windows():

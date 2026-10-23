@@ -36,7 +36,8 @@ def construire_scenario() -> dict:
     acwr_info = calculer_acwr(df_charge)
     imc = ATHLETE_DEMO["poids"] / (ATHLETE_DEMO["taille"] / 100) ** 2
     bilan = {"tdee": 2500.0, "kcal_consommees": 2050.0, "renseigne": True}
-    deficit_pct = (bilan["kcal_consommees"] - bilan["tdee"]) / bilan["tdee"] * 100
+    # Déficit POSITIF quand l'athlète mange moins que son besoin (convention du modèle).
+    deficit_pct = (bilan["tdee"] - bilan["kcal_consommees"]) / bilan["tdee"] * 100
 
     features = construire_vecteur_features(
         acwr=acwr_info["acwr"], charge_chronique=acwr_info["chronique"], fc_repos=FC_REPOS,

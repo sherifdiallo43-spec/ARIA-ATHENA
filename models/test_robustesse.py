@@ -80,6 +80,32 @@ def test_types_inattendus():
     print(f"[OK] Cas bonus — types exotiques gérés, injury_risk_pct={profil['injury_risk_pct']}%")
 
 
+def test_signe_deficit():
+    # Convention du modèle : déficit POSITIF = l'athlète mange moins que son besoin -> risque plus élevé.
+    def risque(deficit):
+        return predire_profil_risque(construire_vecteur_features(
+            acwr=1.1, charge_chronique=420, fc_repos=62, sommeil_h=7.0, age=23, imc=22.5,
+            historique_blessures=0, deficit_calorique_pct=deficit, lactate=2.2,
+            intensite_moyenne_7j=0.55))["injury_risk_pct"]
+    r_deficit, r_neutre, r_surplus = risque(30), risque(0), risque(-30)
+    assert r_deficit > r_neutre >= r_surplus, (r_deficit, r_neutre, r_surplus)
+    print(f"[OK] Signe du déficit — manger 30 % de moins : {r_neutre}% -> {r_deficit}%")
+
+
+def test_imputation_valeurs_typiques():
+    # Une variable absente reçoit sa valeur TYPIQUE (ex. 0 blessure passée), pas le milieu du domaine (5).
+    from .train_injury_model import VALEURS_TYPIQUES
+    vec = construire_vecteur_features(
+        acwr=None, charge_chronique=420, fc_repos=62, sommeil_h=7.0, age=23, imc=22.5,
+        historique_blessures=None, deficit_calorique_pct=0, lactate=None, intensite_moyenne_7j=0.55,
+    )
+    q = predire_profil_risque(vec)["qualite_donnees"]
+    imputees = {c["champ"]: c["valeur_imputee"] for c in q["champs_imputes"]}
+    attendu = {k: VALEURS_TYPIQUES[k] for k in ("acwr", "historique_blessures", "lactate")}
+    assert imputees == attendu, imputees
+    print(f"[OK] Imputation par valeurs typiques : {imputees}")
+
+
 def lancer_tous_les_tests():
     print("=== Tests de robustesse ATHÉNA — données manquantes / aberrantes ===\n")
     test_vecteur_valide()
@@ -87,6 +113,8 @@ def lancer_tous_les_tests():
     test_age_aberrant()
     test_plusieurs_none()
     test_types_inattendus()
+    test_signe_deficit()
+    test_imputation_valeurs_typiques()
     print("\n=== Tous les tests sont passés sans exception. ===")
 
 

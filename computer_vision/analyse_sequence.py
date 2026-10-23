@@ -48,62 +48,118 @@ def _pas_echantillonnage(fps_source: float, fps_cible: float) -> int:
     return max(1, int(round((fps_source or 30.0) / fps_cible)))
 
 
-def lire_frames(chemin_video: str | Path, fps_cible: float = 10.0, max_frames: int = 150):
-    """Lit une vidéo en sous-échantillonnant à ~fps_cible. Retourne (frames_bgr, fps_effectif).
-    Les images sont réduites à LARGEUR_ANALYSE px : les points de pose sont en coordonnées
-    relatives (0-1), donc la mesure des angles n'en dépend pas."""
+def _iterer_images(chemin_video: str | Path, fps_cible: float, max_frames: int):
+    """Parcourt la vidéo UNE fois, à ~fps_cible. Produit (image_bgr, t_ms, infos).
+
+    Les images sautées sont seulement « attrapées » (grab), sans être décodées : une vidéo 4K à
+    60 i/s n'est plus décodée en entier pour en garder une image sur six. Horodatage : position
+    réelle dans la vidéo (vidéos de téléphone à cadence variable), à défaut numéro d'image / fps."""
     import cv2
     cap = cv2.VideoCapture(str(chemin_video))
     if not cap.isOpened():
         raise ValueError("Vidéo illisible ou format non pris en charge.")
     fps_source = cap.get(cv2.CAP_PROP_FPS) or 30.0
     pas = _pas_echantillonnage(fps_source, fps_cible)
-    frames, i = [], 0
-    while len(frames) < max_frames:
-        ok, frame = cap.read()
-        if not ok:
-            break
-        if i % pas == 0:
-            frames.append(_redimensionner(frame, LARGEUR_ANALYSE))
-        i += 1
-    cap.release()
+    n_total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    infos = {"fps_source": fps_source, "pas": pas, "duree_video_s": n_total / fps_source if n_total else None,
+             "n_prevues": min(max_frames, -(-n_total // pas)) if n_total else max_frames}
+    try:
+        i, n, dernier = 0, 0, -1.0
+        while n < max_frames:
+            if i % pas:
+                if not cap.grab():
+                    break
+                i += 1
+                continue
+            ok, frame = cap.read()
+            if not ok:
+                break
+            t_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
+            if not np.isfinite(t_ms) or t_ms <= dernier:
+                t_ms = i * 1000.0 / fps_source
+            dernier = t_ms
+            yield frame, t_ms, infos
+            n += 1
+            i += 1
+    finally:
+        cap.release()
+
+
+def lire_frames(chemin_video: str | Path, fps_cible: float = 10.0, max_frames: int = 150):
+    """Lit une vidéo en sous-échantillonnant à ~fps_cible. Retourne (frames_bgr, fps_effectif).
+    Les images sont réduites à LARGEUR_ANALYSE px : les points de pose sont en coordonnées
+    relatives (0-1), donc la mesure des angles n'en dépend pas."""
+    frames, infos = [], None
+    for frame, _, infos in _iterer_images(chemin_video, fps_cible, max_frames):
+        frames.append(_redimensionner(frame, LARGEUR_ANALYSE))
     if len(frames) < 5:
         raise ValueError("Vidéo trop courte (moins de 5 images exploitables).")
-    return frames, fps_source / pas
+    return frames, infos["fps_source"] / infos["pas"]
+
+
+def _angle_tronc(ep, ha) -> float:
+    return float(np.degrees(np.arctan2(abs(ep[0] - ha[0]), abs(ep[1] - ha[1]) + 1e-9)))
+
+
+def extraire_pose_video(chemin_video: str | Path, fps_cible: float = 10.0, max_frames: int = 150,
+                        rappel_progression=None, largeur_apercu: int = 640) -> dict:
+    """Lecture + détection de pose en UNE passe, en mode VIDÉO (suivi de la personne et lissage
+    des points par MediaPipe : moins de tremblements qu'une détection image par image).
+
+    Retourne serie (table d'angles), fps, landmarks (Points par image, None si non détecté),
+    images (réduites à `largeur_apercu`, pour la vidéo annotée sans relire le fichier),
+    duree_video_s et modele."""
+    import cv2
+    import mediapipe as mp
+    from computer_vision.pose_analysis import (
+        creer_detecteur_video, points_simples, nom_modele, _mesures_cote,
+        LM_EPAULE_G, LM_EPAULE_D, LM_HANCHE_G, LM_HANCHE_D,
+    )
+    lignes, landmarks, images, t0, dernier_ms, infos = [], [], [], None, -1, None
+    with creer_detecteur_video() as detecteur:
+        for k, (frame, t_ms, infos) in enumerate(_iterer_images(chemin_video, fps_cible, max_frames)):
+            frame = _redimensionner(frame, LARGEUR_ANALYSE)
+            t0 = t_ms if t0 is None else t0
+            ms = max(int(round(t_ms)), dernier_ms + 1)      # le mode VIDÉO exige des horodatages croissants
+            dernier_ms = ms
+            res = detecteur.detect_for_video(
+                mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)), ms)
+            images.append(_redimensionner(frame, largeur_apercu))
+            if rappel_progression:
+                rappel_progression(min(1.0, (k + 1) / max(1, infos["n_prevues"])))
+            t = (t_ms - t0) / 1000.0
+            if not res.pose_landmarks:
+                lignes.append({"t": t})
+                landmarks.append(None)
+                continue
+            h, w = frame.shape[:2]
+            lms = points_simples(res.pose_landmarks[0])
+            pt = lambda idx: (lms[idx].x * w, lms[idx].y * h, lms[idx].visibility)  # noqa: E731
+            g, d = _mesures_cote(pt, "G"), _mesures_cote(pt, "D")
+            lignes.append({"t": t, "genou_g": g["angle_genou"], "genou_d": d["angle_genou"],
+                           "hanche_g": g["angle_hanche"], "hanche_d": d["angle_hanche"],
+                           "vis_g": g["visibilite"], "vis_d": d["visibilite"],
+                           "tronc_g": _angle_tronc(pt(LM_EPAULE_G), pt(LM_HANCHE_G)),
+                           "tronc_d": _angle_tronc(pt(LM_EPAULE_D), pt(LM_HANCHE_D))})
+            landmarks.append(lms)
+    if len(images) < 5:
+        raise ValueError("Vidéo trop courte (moins de 5 images exploitables).")
+
+    brut = pd.DataFrame(lignes).reindex(columns=COLONNES_SERIE + ["tronc_g", "tronc_d"])
+    # Tronc mesuré du MÊME côté sur toute la séquence (le plus visible en moyenne) : changer de
+    # côté d'une image à l'autre ajoutait des sauts artificiels à l'angle du tronc.
+    cote = "g" if brut["vis_g"].mean(skipna=True) >= brut["vis_d"].mean(skipna=True) else "d"
+    brut["tronc"] = brut[f"tronc_{cote}"]
+    return {"serie": brut[COLONNES_SERIE], "fps": float(infos["fps_source"] / infos["pas"]),
+            "landmarks": landmarks, "images": images, "duree_video_s": infos["duree_video_s"],
+            "modele": nom_modele()}
 
 
 def extraire_series_depuis_video(chemin_video: str | Path, fps_cible: float = 10.0,
                                  max_frames: int = 150, rappel_progression=None) -> tuple[pd.DataFrame, float, list]:
     """Détecte la pose sur chaque image. Retourne (table d'angles, fps effectif, landmarks par image)."""
-    import cv2
-    import mediapipe as mp
-    from computer_vision.pose_analysis import (
-        _charger_detecteur, _mesures_cote, LM_EPAULE_G, LM_EPAULE_D, LM_HANCHE_G, LM_HANCHE_D,
-    )
-    frames, fps = lire_frames(chemin_video, fps_cible, max_frames)
-    detecteur = _charger_detecteur()
-    lignes, landmarks_par_image = [], []
-    for k, frame in enumerate(frames):
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        res = detecteur.detect(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
-        if rappel_progression:
-            rappel_progression((k + 1) / len(frames))
-        if not res.pose_landmarks:
-            lignes.append({"t": k / fps, **{c: np.nan for c in COLONNES_SERIE[1:]}})
-            landmarks_par_image.append(None)
-            continue
-        h, w = frame.shape[:2]
-        lms = res.pose_landmarks[0]
-        pt = lambda idx: (lms[idx].x * w, lms[idx].y * h, getattr(lms[idx], "visibility", 1.0))  # noqa: E731
-        g, d = _mesures_cote(pt, "G"), _mesures_cote(pt, "D")
-        # côté de référence pour le tronc = le plus visible
-        ep, ha = (pt(LM_EPAULE_G), pt(LM_HANCHE_G)) if g["visibilite"] >= d["visibilite"] else (pt(LM_EPAULE_D), pt(LM_HANCHE_D))
-        tronc = float(np.degrees(np.arctan2(abs(ep[0] - ha[0]), abs(ep[1] - ha[1]) + 1e-9)))
-        lignes.append({"t": k / fps, "genou_g": g["angle_genou"], "genou_d": d["angle_genou"],
-                       "hanche_g": g["angle_hanche"], "hanche_d": d["angle_hanche"], "tronc": tronc,
-                       "vis_g": g["visibilite"], "vis_d": d["visibilite"]})
-        landmarks_par_image.append(lms)
-    return pd.DataFrame(lignes, columns=COLONNES_SERIE), float(fps), landmarks_par_image
+    r = extraire_pose_video(chemin_video, fps_cible, max_frames, rappel_progression)
+    return r["serie"], r["fps"], r["landmarks"]
 
 
 # ------------------------------------------------------------------ analyse ----
@@ -271,64 +327,74 @@ def analyser_series(serie: pd.DataFrame, fps: float, mouvement: str = "Course à
     }
 
 
+def annoter_images(images: list, landmarks_par_image: list, mouvement: str | None = None) -> list:
+    """Squelette dessiné sur chaque image (angles et couleurs de jugement si `mouvement` est donné)."""
+    from computer_vision.pose_analysis import dessiner_squelette
+    return [dessiner_squelette(img, lms, mouvement) if lms is not None else img
+            for img, lms in zip(images, landmarks_par_image)]
+
+
+def encoder_video(images: list, fps: float):
+    """Encode des images en vidéo lisible par un navigateur (Chrome, Edge, Firefox).
+
+    Ordre d'essai :
+      1. MP4/H.264 par Media Foundation (encodeur intégré à Windows) : profil Baseline, le plus
+         compatible, et ~15 fois plus rapide que VP8 (0,4 s au lieu de 5 s pour 15 s de vidéo) ;
+      2. WebM/VP8 par FFmpeg (autres systèmes) ;
+      3. MP4/H.264 par le moteur par défaut.
+    Retourne (octets, type_mime), ou None si aucun encodeur n'est disponible."""
+    import shutil
+    import tempfile
+    import cv2
+    if not images:
+        return None
+    h, w = images[0].shape[:2]
+    msmf = getattr(cv2, "CAP_MSMF", None)
+    essais = ([(msmf, "avc1", ".mp4", "video/mp4")] if msmf is not None else []) + [
+        (None, "VP80", ".webm", "video/webm"), (None, "avc1", ".mp4", "video/mp4")]
+    dossier = Path(tempfile.mkdtemp(prefix="athena_video_"))
+    try:
+        for n, (moteur, fourcc, ext, mime) in enumerate(essais):
+            chemin = dossier / f"video{n}{ext}"
+            code = cv2.VideoWriter_fourcc(*fourcc)
+            writer = (cv2.VideoWriter(str(chemin), moteur, code, fps, (w, h)) if moteur is not None
+                      else cv2.VideoWriter(str(chemin), code, fps, (w, h)))
+            if not writer.isOpened():
+                writer.release()
+                continue
+            for img in images:
+                writer.write(img if img.shape[:2] == (h, w) else cv2.resize(img, (w, h)))
+            writer.release()
+            if chemin.exists() and chemin.stat().st_size > 0:
+                return chemin.read_bytes(), mime
+        return None
+    finally:
+        shutil.rmtree(dossier, ignore_errors=True)   # aucun dossier temporaire laissé derrière
+
+
 def generer_video_annotee(chemin_video: str | Path, landmarks_par_image: list, fps_cible: float = 10.0,
-                          max_frames: int = 150, largeur_max: int = 640):
+                          max_frames: int = 150, largeur_max: int = 640, mouvement: str | None = None):
     """Vidéo de contrôle : les images analysées, avec le squelette détecté dessiné dessus.
 
     Même échantillonnage que lire_frames, donc l'image k correspond aux landmarks k.
-    Format WebM/VP8 (lisible par Chrome, Edge, Firefox), sinon MP4/H.264.
-    Retourne (octets, type_mime), ou None si aucun encodeur n'est disponible."""
-    import tempfile
-    import cv2
-    from computer_vision.pose_analysis import dessiner_squelette
-
-    cap = cv2.VideoCapture(str(chemin_video))
-    if not cap.isOpened():
-        return None
-    fps_source = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    pas = _pas_echantillonnage(fps_source, fps_cible)
-    dossier = Path(tempfile.mkdtemp(prefix="athena_video_"))
-    writer, sortie, mime = None, None, None
-    k, i = 0, 0
+    Retourne (octets, type_mime), ou None si aucun encodeur n'est disponible.
+    (Le dashboard utilise plutôt extraire_pose_video + annoter_images, sans relire la vidéo.)"""
     try:
-        while k < min(max_frames, len(landmarks_par_image)):
-            ok, frame = cap.read()
-            if not ok:
-                break
-            if i % pas == 0:
-                frame = _redimensionner(frame, largeur_max)
-                if landmarks_par_image[k] is not None:
-                    frame = dessiner_squelette(frame, landmarks_par_image[k])
-                if writer is None:
-                    h, w = frame.shape[:2]
-                    for fourcc, ext, type_mime in (("VP80", ".webm", "video/webm"), ("avc1", ".mp4", "video/mp4")):
-                        chemin = dossier / f"annotee{ext}"
-                        essai = cv2.VideoWriter(str(chemin), cv2.VideoWriter_fourcc(*fourcc), fps_source / pas, (w, h))
-                        if essai.isOpened():
-                            writer, sortie, mime = essai, chemin, type_mime
-                            break
-                        essai.release()
-                    if writer is None:
-                        return None
-                writer.write(frame)
-                k += 1
-            i += 1
-    finally:
-        cap.release()
-        if writer is not None:
-            writer.release()
-    if sortie is None or not sortie.exists() or sortie.stat().st_size == 0:
+        images, infos = [], None
+        for frame, _, infos in _iterer_images(chemin_video, fps_cible, min(max_frames, len(landmarks_par_image))):
+            images.append(_redimensionner(frame, largeur_max))
+    except ValueError:
         return None
-    octets = sortie.read_bytes()
-    sortie.unlink(missing_ok=True)
-    return octets, mime
+    if not images:
+        return None
+    return encoder_video(annoter_images(images, landmarks_par_image, mouvement), infos["fps_source"] / infos["pas"])
 
 
 def analyser_video(chemin_video: str | Path, mouvement: str = "Course à pied",
                    fps_cible: float = 10.0, rappel_progression=None) -> dict:
-    """Pipeline complet : vidéo -> pose image par image -> analyse temporelle."""
-    serie, fps, landmarks = extraire_series_depuis_video(chemin_video, fps_cible, rappel_progression=rappel_progression)
-    resultat = analyser_series(serie, fps, mouvement)
-    resultat["landmarks_par_image"] = landmarks
-    resultat["fps"] = round(fps, 1)
+    """Pipeline complet : vidéo -> pose (mode vidéo, avec suivi) -> analyse temporelle."""
+    extraction = extraire_pose_video(chemin_video, fps_cible, rappel_progression=rappel_progression)
+    resultat = analyser_series(extraction["serie"], extraction["fps"], mouvement)
+    resultat["landmarks_par_image"] = extraction["landmarks"]
+    resultat["fps"] = round(extraction["fps"], 1)
     return resultat

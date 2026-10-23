@@ -36,10 +36,20 @@ FEATURE_NAMES = [
     "age",
     "imc",                  # indice de masse corporelle
     "historique_blessures", # nb de blessures sur les 12 derniers mois
-    "deficit_calorique_pct",# écart calorique vs TDEE (%)
+    "deficit_calorique_pct",# déficit calorique vs TDEE (%) : POSITIF = mange moins que le besoin
     "lactate",
     "intensite_moyenne_7j", # intensité d'effort moyenne (0-1) sur 7 jours
 ]
+
+# Valeur utilisée quand une variable n'est pas mesurée : la valeur TYPIQUE du jeu d'entraînement
+# (médianes arrondies, n = 8000), et non le milieu du domaine, qui plaçait par exemple
+# 5 blessures passées (moyenne réelle 0,7) et une ACWR de 1,4 (zone de prudence) chez tout le monde.
+# ACWR neutre (1,0) et aucune blessure passée : on n'invente pas un facteur de risque non mesuré.
+VALEURS_TYPIQUES = {
+    "acwr": 1.0, "charge_chronique": 420.0, "fc_repos_estimee": 62.0, "sommeil_h": 7.0,
+    "age": 23.0, "imc": 22.5, "historique_blessures": 0.0, "deficit_calorique_pct": 0.0,
+    "lactate": 2.2, "intensite_moyenne_7j": 0.55,
+}
 
 
 def _generer_dataset(n: int = 6000, graine: int = 42):

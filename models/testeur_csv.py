@@ -5,8 +5,9 @@
 #   1. lit le CSV (séparateur , ou ; détecté, virgule décimale acceptée, BOM/UTF-8 ou Latin-1) ;
 #   2. associe les colonnes du fichier aux 10 variables du modèle (noms exacts, synonymes FR/EN,
 #      ou fichier --mapping) et AFFICHE l'association, y compris les variables absentes ;
-#   3. nettoie comme en production (valeur manquante -> milieu du domaine, valeur hors domaine -> bornée)
-#      et compte chaque correction ;
+#   3. détecte les unités courantes (sommeil en minutes, intensité sur 10 ou 100, bilan calorique au lieu
+#      d'un déficit) et les convertit en le disant, puis nettoie comme en production (valeur manquante ->
+#      valeur typique de l'entraînement, valeur hors domaine -> bornée) et compte chaque correction ;
 #   4. prédit : score de risque, probabilité corrigée de la prévalence, fatigue ;
 #   5. si une colonne d'étiquette existe : ROC-AUC avec IC95 (bootstrap), précision/rappel, rappel parmi les
 #      20 % les plus à risque, Brier, fiabilité par tranches ; si une colonne fatigue existe : MAE/RMSE/R² ;
@@ -44,7 +45,7 @@ if __package__ in (None, ""):                       # lancement direct : python 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     __package__ = "models"
 
-from .train_injury_model import FEATURE_NAMES, _generer_dataset            # noqa: E402
+from .train_injury_model import FEATURE_NAMES, VALEURS_TYPIQUES, _generer_dataset  # noqa: E402
 from .injury_risk import (_charger_modeles, corriger_prevalence, DOMAINE_ENTRAINEMENT, LABELS_LISIBLES)  # noqa: E402
 
 # Synonymes (déjà normalisés : minuscules, sans accents, séparateurs -> « _ »).
@@ -60,7 +61,8 @@ SYNONYMES = {
     "historique_blessures": ["historique_blessures", "antecedents", "antecedents_blessures", "previous_injuries",
                              "prior_injuries", "injury_history", "nb_blessures", "past_injuries", "blessures_passees"],
     "deficit_calorique_pct": ["deficit_calorique_pct", "deficit_calorique", "calorie_deficit", "caloric_deficit",
-                              "energy_deficit", "ecart_calorique", "calorie_balance_pct"],
+                              "energy_deficit", "ecart_calorique", "calorie_balance_pct", "calorie_balance",
+                              "energy_balance", "bilan_calorique", "bilan_energetique"],
     "lactate": ["lactate", "lactate_mmol", "blood_lactate", "taux_lactate"],
     "intensite_moyenne_7j": ["intensite_moyenne_7j", "intensite", "intensite_7j", "intensity", "avg_intensity",
                              "mean_intensity_7d", "intensity_7d", "training_intensity"],
@@ -73,6 +75,11 @@ SYN_TAILLE = ["taille", "taille_cm", "taille_m", "height", "height_cm", "height_
 # rapport final, figure 6b). Sans aucune d'elles, les scores ne départagent presque pas les athlètes.
 VARIABLES_CLES = ["sommeil_h", "historique_blessures", "acwr"]
 SEUIL_HORS_DOMAINE = 0.20   # au-delà de 20 % de valeurs bornées, la variable sort du domaine appris
+SEUIL_COLONNE_VIDE = 0.50   # au-delà de 50 % de valeurs illisibles/vides, la colonne ne compte pas comme mesurée
+# Un BILAN (mangé - besoin) est négatif quand l'athlète mange trop peu : c'est l'opposé du déficit appris
+# par le modèle (positif = mange trop peu). Ces colonnes sont donc lues avec le signe inversé.
+SYN_BILAN_CALORIQUE = {"ecart_calorique", "calorie_balance_pct", "calorie_balance", "energy_balance",
+                       "bilan_calorique", "bilan_energetique"}
 
 SYN_ETIQUETTE = ["blessure", "blesse", "injury", "injured", "injury_occurred", "label", "target", "y", "cible", "is_injured"]
 SYN_FATIGUE = ["fatigue", "fatigue_score", "fatigue_level", "niveau_fatigue", "score_fatigue"]
@@ -188,7 +195,10 @@ def verdict_compatibilite(assoc: dict, qualite: dict, n_lignes: int, score: np.n
     - incompatible : aucune des variables clés n'est mesurée, les scores sont quasi constants ;
     - partiel : moins de 5 variables, une variable clé manque, ou les données sortent du domaine appris ;
     - compatible : sinon."""
-    mesurees = [f for f in FEATURE_NAMES if assoc[f]["colonne"]]
+    # Une colonne trouvée mais vide ou illisible (ex. « 7h30 ») n'apporte rien : elle ne compte pas.
+    vides = [f for f in FEATURE_NAMES
+             if assoc[f]["colonne"] and qualite[f]["manquantes"] > SEUIL_COLONNE_VIDE * max(1, n_lignes)]
+    mesurees = [f for f in FEATURE_NAMES if assoc[f]["colonne"] and f not in vides]
     cles_presentes = [f for f in VARIABLES_CLES if f in mesurees]
     hors_domaine = {f: round((qualite[f]["sous_domaine"] + qualite[f]["sur_domaine"]) / max(1, n_lignes), 3)
                     for f in mesurees}
@@ -203,8 +213,11 @@ def verdict_compatibilite(assoc: dict, qualite: dict, n_lignes: int, score: np.n
         statut = "partiel"
     else:
         statut = "compatible"
+    for f in vides:
+        raisons.append(f"{LABELS_LISIBLES[f]} : colonne « {assoc[f]['colonne']} » trouvée mais vide ou illisible "
+                       f"à {qualite[f]['manquantes'] / max(1, n_lignes) * 100:.0f} % : comptée comme absente.")
     if len(mesurees) < 5:
-        raisons.append(f"Seulement {len(mesurees)} variable(s) sur 10 trouvée(s).")
+        raisons.append(f"Seulement {len(mesurees)} variable(s) sur 10 réellement mesurée(s).")
     manquantes_cles = [LABELS_LISIBLES[f] for f in VARIABLES_CLES if f not in mesurees]
     if cles_presentes and manquantes_cles:
         raisons.append("Variable(s) clé(s) absente(s) : " + ", ".join(manquantes_cles) + ".")
@@ -217,7 +230,7 @@ def verdict_compatibilite(assoc: dict, qualite: dict, n_lignes: int, score: np.n
         if statut == "compatible":
             statut = "partiel"
     return {"statut": statut, "raisons": raisons, "variables_cles_presentes": cles_presentes,
-            "hors_domaine": hors_domaine, "dispersion_scores": round(dispersion, 4)}
+            "hors_domaine": hors_domaine, "dispersion_scores": round(dispersion, 4), "colonnes_vides": vides}
 
 
 def _trouver(df, nom_force, synonymes, exclues):
@@ -244,6 +257,12 @@ def lire_etiquette(serie: pd.Series) -> tuple[np.ndarray, list]:
     if len(valeurs) == 2:
         notes.append(f"Étiquette à deux valeurs {valeurs.tolist()} : la plus grande est lue comme « blessure ».")
         return (num == valeurs.max()).where(num.notna()).astype(float).to_numpy(), notes
+    if len(valeurs) > 2 and valeurs.min() >= 0 and num.notna().sum() >= 0.5 * len(s):
+        # Ex. nombre de blessures (0, 1, 2, 3) ou jours d'arrêt : plutôt que de tout refuser,
+        # « au moins une blessure » = 1. C'est dit dans le rapport.
+        notes.append(f"Étiquette à {len(valeurs)} valeurs ({', '.join(f'{v:g}' for v in valeurs[:6])}"
+                     f"{'…' if len(valeurs) > 6 else ''}) : toute valeur > 0 est lue comme « blessure ».")
+        return (num > 0).where(num.notna()).astype(float).to_numpy(), notes
     raise ValueError("Colonne d'étiquette non reconnue : attendu 0/1, oui/non, true/false, injured/healthy. "
                      f"Valeurs vues : {sorted(map(str, txt.unique()))[:8]}")
 
@@ -252,7 +271,7 @@ def lire_etiquette(serie: pd.Series) -> tuple[np.ndarray, list]:
 
 def nettoyer_matrice(X: np.ndarray) -> tuple[np.ndarray, dict]:
     """Même règle que models.injury_risk.valider_et_nettoyer_features, vectorisée.
-    NaN -> milieu du domaine d'entraînement ; hors domaine -> borne. Retourne aussi les compteurs."""
+    NaN -> valeur typique de l'entraînement ; hors domaine -> borne. Retourne aussi les compteurs."""
     Xn = X.astype(float).copy()
     stats = {}
     for j, nom in enumerate(FEATURE_NAMES):
@@ -261,7 +280,7 @@ def nettoyer_matrice(X: np.ndarray) -> tuple[np.ndarray, dict]:
         manq = ~np.isfinite(col)
         bas = np.isfinite(col) & (col < lo)
         haut = np.isfinite(col) & (col > hi)
-        col[manq] = (lo + hi) / 2
+        col[manq] = VALEURS_TYPIQUES[nom]
         col[bas] = lo
         col[haut] = hi
         stats[nom] = {"manquantes": int(manq.sum()), "sous_domaine": int(bas.sum()), "sur_domaine": int(haut.sum())}
@@ -275,6 +294,46 @@ def construire_X(df: pd.DataFrame, assoc: dict) -> np.ndarray:
         if c is not None:
             X[:, j] = _en_numerique(df[c]).to_numpy()
     return X
+
+
+def convertir_unites(X: np.ndarray, assoc: dict) -> tuple[np.ndarray, list]:
+    """Corrige les unités les plus courantes d'un fichier inconnu, en le disant à chaque fois.
+    Les seuils sont choisis pour ne jamais se déclencher sur des valeurs déjà dans la bonne unité."""
+    X = X.copy()
+    notes = []
+
+    def _col(feat):
+        return FEATURE_NAMES.index(feat)
+
+    def _mediane(j):
+        v = X[:, j][np.isfinite(X[:, j])]
+        return float(np.median(v)) if len(v) else None, (float(np.max(np.abs(v))) if len(v) else None)
+
+    j = _col("sommeil_h")
+    med, _ = _mediane(j)
+    if assoc["sommeil_h"]["colonne"] and med is not None and med > 24:
+        X[:, j] /= 60
+        notes.append(f"Sommeil lu en minutes (médiane {med:g}) : converti en heures.")
+
+    j = _col("intensite_moyenne_7j")
+    med, maxi = _mediane(j)
+    if assoc["intensite_moyenne_7j"]["colonne"] and med is not None and med > 1.5:
+        div = 10 if maxi <= 10.5 else 100
+        X[:, j] /= div
+        notes.append(f"Intensité lue sur une échelle 0-{div} (médiane {med:g}) : ramenée à 0-1.")
+
+    j = _col("deficit_calorique_pct")
+    col = assoc["deficit_calorique_pct"]["colonne"]
+    if col:
+        if _norm(col) in SYN_BILAN_CALORIQUE:
+            X[:, j] *= -1
+            notes.append(f"« {col} » est un bilan (mangé - besoin) : signe inversé pour obtenir un déficit "
+                         "(positif = mange moins que le besoin).")
+        med, maxi = _mediane(j)
+        if maxi is not None and 0 < maxi <= 1:
+            X[:, j] *= 100
+            notes.append("Écart calorique donné en fraction (ex. 0,15) : converti en pourcentage.")
+    return X, notes
 
 
 # ---------------------------------------------------------------------------------------- métriques ----
@@ -373,7 +432,7 @@ def analyser(chemin_test, cible=None, fatigue=None, mapping=None, chemin_train=N
     exclues |= {col_y} if col_y else set()
     col_f = _trouver(df, fatigue, SYN_FATIGUE, exclues)
 
-    X = construire_X(df, assoc)
+    X, notes_unites = convertir_unites(construire_X(df, assoc), assoc)
     n_mesurees = sum(1 for f in FEATURE_NAMES if assoc[f]["colonne"])
     if n_mesurees == 0:
         raise ValueError("Aucune des 10 variables du modèle n'a été trouvée dans le fichier. "
@@ -387,12 +446,13 @@ def analyser(chemin_test, cible=None, fatigue=None, mapping=None, chemin_train=N
     res = {"fichier": str(chemin_test), "date": datetime.now().isoformat(timespec="seconds"),
            "lignes": int(len(df)), "colonnes_fichier": list(map(str, df.columns)),
            "correspondance": {f: assoc[f] for f in FEATURE_NAMES}, "variables_mesurees": n_mesurees,
-           "qualite": stats, "avertissements": list(notes_imc)}
+           "qualite": stats, "avertissements": list(notes_imc) + notes_unites}
     res["verdict"] = verdict_compatibilite(assoc, stats, len(df), score)
     absentes = [f for f in FEATURE_NAMES if not assoc[f]["colonne"]]
     if absentes:
-        res["avertissements"].append("Variables absentes, remplacées par le milieu du domaine d'entraînement : "
-                                     + ", ".join(LABELS_LISIBLES[f] for f in absentes) + ".")
+        res["avertissements"].append("Variables absentes, remplacées par leur valeur typique à l'entraînement : "
+                                     + ", ".join(f"{LABELS_LISIBLES[f]} ({VALEURS_TYPIQUES[f]:g})" for f in absentes)
+                                     + ".")
     if n_mesurees < 5:
         res["avertissements"].append("Moins de 5 variables sur 10 présentes : les scores sont peu informatifs.")
     taux_manq = float(np.isnan(X[:, [j for j, f in enumerate(FEATURE_NAMES) if assoc[f]['colonne']]]).mean())
@@ -415,8 +475,6 @@ def analyser(chemin_test, cible=None, fatigue=None, mapping=None, chemin_train=N
             res["avertissements"].append(f"{int((~ok).sum())} lignes sans étiquette ignorées pour les métriques.")
         res["colonne_etiquette"] = col_y
         res["production"] = metriques_classification(y[ok], score[ok], proba[ok])
-        if chemin_train is None:
-            pass
         yy = y[ok]
         res["_y"] = yy
     if col_f:
@@ -432,7 +490,7 @@ def analyser(chemin_test, cible=None, fatigue=None, mapping=None, chemin_train=N
             raise ValueError("Le fichier d'entraînement doit contenir une colonne d'étiquette (--cible).")
         ytr, _ = lire_etiquette(dtr[cy_tr])
         okt = np.isfinite(ytr)
-        Xtr = construire_X(dtr, atr)[okt]
+        Xtr = convertir_unites(construire_X(dtr, atr), atr)[0][okt]
         communes = [j for j, f in enumerate(FEATURE_NAMES) if atr[f]["colonne"] and assoc[f]["colonne"]]
         if not communes:
             raise ValueError("Aucune variable commune entre entraînement et test.")

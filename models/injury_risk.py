@@ -4,13 +4,17 @@
 # ainsi que les facteurs contributifs principaux (feature importance).
 
 import json
+import warnings
 from pathlib import Path
 from functools import lru_cache
 
 import numpy as np
 import joblib
 
-from .train_injury_model import FEATURE_NAMES, ARTIFACTS_DIR, entrainer_et_sauvegarder, _generer_dataset
+from analytics.metrics import charge_quotidienne
+
+from .train_injury_model import (FEATURE_NAMES, VALEURS_TYPIQUES, ARTIFACTS_DIR, entrainer_et_sauvegarder,
+                                 _generer_dataset)
 
 LABELS_LISIBLES = {
     "acwr": "Ratio charge aiguë/chronique (ACWR)",
@@ -39,32 +43,48 @@ DOMAINE_ENTRAINEMENT = {
 }
 
 
-@lru_cache(maxsize=1)
-def _charger_modeles():
-    """Charge les modèles depuis le disque ; les entraîne si absents (1er lancement)."""
+@lru_cache(maxsize=2)
+def _charger_modeles(reentrainer_si_echec: bool = True):
+    """Charge les modèles depuis le disque ; les entraîne si absents (1er lancement).
+
+    Une version de scikit-learn différente de celle qui a sauvegardé les modèles ne fait
+    qu'émettre un avertissement (InconsistentVersionWarning) : il est capturé et rendu
+    visible dans metadata["avertissement_version"] au lieu de passer inaperçu.
+    `reentrainer_si_echec=False` (vérificateur de démo) : lève l'erreur au lieu de réentraîner en silence."""
     chemin_clf = ARTIFACTS_DIR / "injury_risk_model.joblib"
     chemin_reg = ARTIFACTS_DIR / "fatigue_model.joblib"
     chemin_meta = ARTIFACTS_DIR / "metadata.json"
 
     if not (chemin_clf.exists() and chemin_reg.exists()):
+        if not reentrainer_si_echec:
+            raise FileNotFoundError("Fichiers .joblib des modèles absents de models/artifacts.")
         entrainer_et_sauvegarder()
 
-    try:
-        clf = joblib.load(chemin_clf)
-        reg = joblib.load(chemin_reg)
-    except Exception:
-        entrainer_et_sauvegarder()
-        clf = joblib.load(chemin_clf)
-        reg = joblib.load(chemin_reg)
+    with warnings.catch_warnings(record=True) as alertes:
+        warnings.simplefilter("always")
+        try:
+            clf = joblib.load(chemin_clf)
+            reg = joblib.load(chemin_reg)
+        except Exception:
+            if not reentrainer_si_echec:
+                raise
+            entrainer_et_sauvegarder()
+            clf = joblib.load(chemin_clf)
+            reg = joblib.load(chemin_reg)
 
     metadata = json.loads(chemin_meta.read_text()) if chemin_meta.exists() else {}
+    versions = [str(a.message) for a in alertes if type(a.message).__name__ == "InconsistentVersionWarning"]
+    if versions:
+        metadata["avertissement_version"] = (
+            "Modèles sauvegardés avec une autre version de scikit-learn que celle installée : les scores "
+            "peuvent différer. Installer la version de requirements.txt. " + versions[0][:200])
     return clf, reg, metadata
 
 
 @lru_cache(maxsize=1)
 def _prevalence_entrainement() -> float:
     """Fréquence réelle de la classe 'blessure' dans les données d'entraînement (~20 %)."""
-    return float(_generer_dataset()[1].mean())
+    return float(_generer_dataset(n=8000)[1].mean())   # même taille qu'à l'entraînement
 
 
 def corriger_prevalence(proba: float) -> float:
@@ -142,11 +162,11 @@ def valider_et_nettoyer_features(vecteur) -> tuple:
             continue
 
         borne_min, borne_max = DOMAINE_ENTRAINEMENT[nom]
-        milieu = (borne_min + borne_max) / 2
 
         if not np.isfinite(val):
-            vecteur_nettoye[0, i] = milieu
-            rapport["champs_imputes"].append({"champ": nom, "valeur_imputee": round(float(milieu), 3)})
+            # Valeur typique de l'entraînement (pas le milieu du domaine : voir VALEURS_TYPIQUES).
+            vecteur_nettoye[0, i] = VALEURS_TYPIQUES[nom]
+            rapport["champs_imputes"].append({"champ": nom, "valeur_imputee": round(float(VALEURS_TYPIQUES[nom]), 3)})
         elif val < borne_min:
             vecteur_nettoye[0, i] = borne_min
             rapport["champs_clippes"].append({"champ": nom, "valeur_recue": round(float(val), 3),
@@ -210,7 +230,8 @@ def predire_tendance_risque(features_base: np.ndarray, df_charge, jours: int = 7
     derniers `jours` et résumé de la tendance (hausse / baisse / stable)."""
     clf, _, _ = _charger_modeles()
     features_base_nettoye, _ = valider_et_nettoyer_features(features_base)
-    charges = df_charge["charge"].reset_index(drop=True)
+    # Jours calendaires (séances du même jour additionnées, repos = 0), comme calculer_acwr.
+    charges = charge_quotidienne(df_charge, jours=28 + jours).reset_index(drop=True)
     n = len(charges)
     trajectoire = []
 

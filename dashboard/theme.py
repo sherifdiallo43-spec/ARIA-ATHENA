@@ -208,9 +208,11 @@ def marque_barre_laterale():
     )
 
 
-def en_tete(athlete: str, profil_risque: dict, acwr_info: dict, mode_simulation: bool):
+def en_tete(athlete: str, profil_risque: dict, acwr_info: dict, mode_simulation: bool,
+            source: str | None = None):
     """Bandeau supérieur : identité du produit + statut de l'athlète en un coup d'œil."""
     cat = profil_risque["injury_risk_categorie"]
+    source = source or ("Simulation" if mode_simulation else "Capteurs")
     st.markdown(
         f"""
         <div class="entete">
@@ -230,7 +232,7 @@ def en_tete(athlete: str, profil_risque: dict, acwr_info: dict, mode_simulation:
             <div class="entete-bloc"><div class="entete-bloc-label">ACWR</div>
               <div class="entete-bloc-valeur">{acwr_info['acwr']} · {acwr_info['zone']}</div></div>
             <div class="entete-bloc"><div class="entete-bloc-label">Source</div>
-              <div class="entete-bloc-valeur">{'Simulation' if mode_simulation else 'Capteurs'}</div></div>
+              <div class="entete-bloc-valeur">{source}</div></div>
           </div>
         </div>
         """,

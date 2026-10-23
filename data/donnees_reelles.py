@@ -11,6 +11,8 @@
 # Éthique : utiliser des identifiants pseudonymisés (A01, A02...) et obtenir le
 # consentement écrit de chaque athlète (et d'un parent/tuteur si mineur).
 
+import os
+import uuid
 from pathlib import Path
 
 import numpy as np
@@ -19,9 +21,16 @@ import pandas as pd
 DOSSIER_REEL = Path(__file__).parent / "real"
 DOSSIER_REEL.mkdir(exist_ok=True)
 CHEMIN_JOURNAL = DOSSIER_REEL / "journal.csv"
+CHEMIN_REPAS = DOSSIER_REEL / "repas.csv"
 
 COLONNES = ["athlete_id", "date", "rpe", "duree_min", "sommeil_h", "fc_repos",
             "poids_kg", "douleur", "blessure"]
+COLONNES_REPAS = ["id", "athlete_id", "date", "heure", "repas", "kcal",
+                  "proteines_g", "glucides_g", "lipides_g"]
+
+
+class ErreurJournal(Exception):
+    """Erreur à montrer telle quelle à l'utilisateur (message en français, sans trace Python)."""
 
 DESCRIPTION_COLONNES = {
     "athlete_id": "Identifiant pseudonymisé (ex. A01)",
@@ -37,17 +46,15 @@ DESCRIPTION_COLONNES = {
 
 # Plages plausibles : toute valeur hors plage est ignorée (comptée dans le rapport).
 PLAGES = {
-    "rpe": (0, 10), "duree_min": (0, 300), "sommeil_h": (2, 14), "fc_repos": (30, 120),
+    # 600 min : la durée du jour additionne les séances (ex. 2 x 3 h).
+    "rpe": (0, 10), "duree_min": (0, 600), "sommeil_h": (2, 14), "fc_repos": (30, 120),
     "poids_kg": (30, 200), "douleur": (0, 10), "blessure": (0, 1),
 }
 
-# Valeurs de référence (médianes du jeu d'entraînement) pour ce que le journal ne mesure pas.
-# Elles sont TOUJOURS signalées comme "non mesurées" dans le rapport de features.
-VALEURS_REF = {
-    "fc_repos_estimee": 62.0, "sommeil_h": 7.0, "age": 24.0, "imc": 22.5,
-    "historique_blessures": 0.0, "deficit_calorique_pct": 0.0, "lactate": 2.2,
-    "intensite_moyenne_7j": 0.55,
-}
+# Valeurs de référence pour ce que le journal ne mesure pas : la même table que le dashboard et le
+# testeur CSV (valeurs typiques du jeu d'entraînement). Elles sont TOUJOURS signalées comme
+# "non mesurées" dans le rapport de features.
+from models.train_injury_model import VALEURS_TYPIQUES as VALEURS_REF  # noqa: E402
 
 HISTORIQUE_MIN_JOURS = 14   # il faut au moins 2 semaines de journal pour calculer des features
 HORIZON_JOURS = 7           # on prédit une blessure dans les 7 jours suivants
@@ -58,6 +65,23 @@ HORIZON_JOURS = 7           # on prédit une blessure dans les 7 jours suivants
 def gabarit_csv() -> str:
     """CSV vide avec les bons en-têtes, à donner aux athlètes / entraîneurs."""
     return ",".join(COLONNES) + "\n"
+
+
+def normaliser_id(ids) -> pd.Series:
+    """Identifiants comparables : texte, sans espaces autour, en majuscules (« a01 » = « A01 »).
+    Un identifiant absent devient "" (et la ligne est ensuite écartée)."""
+    s = pd.Series(ids, dtype="string").str.strip().str.upper().fillna("")
+    return s.where(~s.isin(["NAN", "NONE", "<NA>"]), "").astype(object)
+
+
+def lire_dates(valeurs) -> pd.Series:
+    """Dates AAAA-MM-JJ, puis à défaut au format français JJ/MM/AAAA (jamais MM/JJ)."""
+    texte = pd.Series(valeurs).astype("string").str.strip()
+    dates = pd.to_datetime(texte, errors="coerce", format="ISO8601")
+    reste = dates.isna() & texte.notna()
+    if reste.any():
+        dates[reste] = pd.to_datetime(texte[reste], errors="coerce", dayfirst=True, format="mixed")
+    return dates.dt.normalize()
 
 
 def preparer_journal(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
@@ -71,11 +95,11 @@ def preparer_journal(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
             df[col] = np.nan
     df = df[COLONNES]
 
-    df["athlete_id"] = df["athlete_id"].astype(str).str.strip()
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df["athlete_id"] = normaliser_id(df["athlete_id"])
+    df["date"] = lire_dates(df["date"])
     rapport["dates_invalides"] = int(df["date"].isna().sum())
     df = df.dropna(subset=["date"])
-    df = df[df["athlete_id"].ne("") & df["athlete_id"].ne("nan")]
+    df = df[df["athlete_id"].ne("")]
 
     for col, (lo, hi) in PLAGES.items():
         if not pd.api.types.is_numeric_dtype(df[col]):
@@ -96,20 +120,149 @@ def preparer_journal(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     return df.reset_index(drop=True), rapport
 
 
+def _ecrire_atomique(df: pd.DataFrame, chemin: Path) -> None:
+    """Écrit dans un fichier temporaire puis le renomme : une coupure ne laisse jamais
+    un fichier à moitié écrit. UTF-8 avec BOM pour qu'Excel affiche bien les accents."""
+    tmp = chemin.with_name(chemin.name + ".tmp")
+    try:
+        df.to_csv(tmp, index=False, encoding="utf-8-sig", date_format="%Y-%m-%d")
+        os.replace(tmp, chemin)
+    except PermissionError:
+        raise ErreurJournal(f"Impossible d'enregistrer : le fichier {chemin.name} est ouvert dans un autre "
+                            "programme (Excel ?). Ferme-le puis recommence.") from None
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+
+
+def _lire_fichier(chemin: Path) -> pd.DataFrame | None:
+    """Contenu brut d'un fichier de données, None s'il n'existe pas ou est vide."""
+    if not chemin.exists() or chemin.stat().st_size == 0:
+        return None
+    try:
+        return lire_csv_robuste(chemin, dtype={"athlete_id": str, "id": str})
+    except (ValueError, PermissionError) as e:
+        raise ErreurJournal(f"Le fichier {chemin.name} est illisible ({e}). Il n'a pas été modifié : "
+                            "corrige-le ou restaure la dernière sauvegarde exportée.") from None
+
+
 def charger_journal() -> pd.DataFrame:
-    if not CHEMIN_JOURNAL.exists():
+    brut = _lire_fichier(CHEMIN_JOURNAL)
+    if brut is None:
         return pd.DataFrame(columns=COLONNES)
-    df, _ = preparer_journal(pd.read_csv(CHEMIN_JOURNAL))
+    df, _ = preparer_journal(reconnaitre_colonnes(brut)[0])
+    if len(brut) and df.empty:
+        # Sans ce garde-fou, la sauvegarde suivante réécrirait le journal avec une seule ligne.
+        raise ErreurJournal(f"{CHEMIN_JOURNAL.name} contient {len(brut)} ligne(s) mais aucune n'est lisible "
+                            "(identifiants ou dates). Le journal n'a pas été modifié.")
     return df
 
 
-def ajouter_entree(entree: dict) -> pd.DataFrame:
-    """Ajoute (ou remplace) une ligne du journal et sauvegarde sur disque."""
+def ajouter_entree(entree: dict) -> tuple[pd.DataFrame, str]:
+    """Ajoute (ou remplace) la journée d'un athlète et sauvegarde sur disque.
+    Retourne (journal, statut) avec statut "ajoutee" ou "remplacee"."""
+    athlete = normaliser_id([entree.get("athlete_id")]).iloc[0]
+    if not athlete:
+        raise ErreurJournal("Identifiant vide : indique l'identifiant de l'athlète (ex. A01).")
+    date = lire_dates([entree.get("date")]).iloc[0]
+    if pd.isna(date):
+        raise ErreurJournal("Date illisible : utilise le format AAAA-MM-JJ ou JJ/MM/AAAA.")
     actuel = charger_journal()
+    existait = bool(((actuel["athlete_id"] == athlete) & (actuel["date"] == date)).any())
     nouvelle = pd.DataFrame([{c: entree.get(c, np.nan) for c in COLONNES}])
+    nouvelle["athlete_id"], nouvelle["date"] = athlete, date
     fusion, _ = preparer_journal(pd.concat([actuel, nouvelle], ignore_index=True))
-    fusion.to_csv(CHEMIN_JOURNAL, index=False)
-    return fusion
+    _ecrire_atomique(fusion, CHEMIN_JOURNAL)
+    return fusion, "remplacee" if existait else "ajoutee"
+
+
+def ajouter_seance(athlete_id, date, rpe: float, duree_min: float) -> tuple[pd.DataFrame, dict]:
+    """Ajoute une séance à la journée d'un athlète SANS effacer le reste de la journée
+    (sommeil, FC...). Deux séances le même jour sont cumulées : durées additionnées et
+    RPE pondéré pour que RPE x durée = somme des charges (sRPE de Foster)."""
+    athlete = normaliser_id([athlete_id]).iloc[0]
+    if not athlete:
+        raise ErreurJournal("Identifiant vide : indique l'identifiant de l'athlète (ex. A01).")
+    if duree_min <= 0:
+        raise ErreurJournal("Durée nulle : indique la durée de la séance en minutes.")
+    jour = lire_dates([date]).iloc[0]
+    actuel = charger_journal()
+    masque = (actuel["athlete_id"] == athlete) & (actuel["date"] == jour)
+    entree = actuel[masque].iloc[0].to_dict() if masque.any() else {"athlete_id": athlete, "date": jour}
+    charge_avant = float(np.nan_to_num(entree.get("rpe", np.nan)) * np.nan_to_num(entree.get("duree_min", np.nan)))
+    duree_totale = float(np.nan_to_num(entree.get("duree_min", np.nan))) + float(duree_min)
+    charge_totale = charge_avant + float(rpe) * float(duree_min)
+    entree["duree_min"] = duree_totale
+    entree["rpe"] = round(charge_totale / duree_totale, 2)
+    journal, _ = ajouter_entree(entree)
+    return journal, {"cumulee": bool(masque.any()), "charge_jour": round(charge_totale),
+                     "duree_jour": round(duree_totale)}
+
+
+def charge_28j(df_journal: pd.DataFrame, athlete_id: str, fin=None) -> pd.DataFrame:
+    """Charge jour par jour (RPE x durée) d'un athlète réel, jusqu'à `fin` (aujourd'hui par
+    défaut), au format de `calculer_acwr` : colonnes date, charge. Jours sans saisie = 0."""
+    fin = pd.Timestamp(fin if fin is not None else pd.Timestamp.today()).normalize()
+    d = df_journal[(df_journal["athlete_id"] == athlete_id) & (df_journal["date"] <= fin)]
+    if d.empty:
+        return pd.DataFrame(columns=["date", "charge"])
+    serie = serie_quotidienne(d)
+    debut = max(serie.index.min(), fin - pd.Timedelta(days=27))
+    jours = pd.date_range(debut, fin, freq="D")
+    charge = serie["charge"].reindex(jours, fill_value=0.0)
+    return pd.DataFrame({"date": jours.date, "charge": charge.values})
+
+
+def moyennes_7j(df_journal: pd.DataFrame, athlete_id: str, fin=None) -> dict:
+    """Moyennes du sommeil et de la FC au réveil sur les 7 derniers jours (NaN si non saisis)."""
+    fin = pd.Timestamp(fin if fin is not None else pd.Timestamp.today()).normalize()
+    d = df_journal[(df_journal["athlete_id"] == athlete_id)
+                   & (df_journal["date"] > fin - pd.Timedelta(days=7)) & (df_journal["date"] <= fin)]
+    return {"sommeil_h": float(d["sommeil_h"].mean()) if len(d) else np.nan,
+            "fc_repos": float(d["fc_repos"].mean()) if len(d) else np.nan}
+
+
+# ------------------------------------------------------------------ repas ----
+
+def charger_repas(athlete_id=None, jour=None) -> pd.DataFrame:
+    """Repas enregistrés, filtrés par athlète et/ou par jour si demandé."""
+    brut = _lire_fichier(CHEMIN_REPAS)
+    if brut is None:
+        return pd.DataFrame(columns=COLONNES_REPAS)
+    df = brut.reindex(columns=COLONNES_REPAS)
+    df["id"] = df["id"].astype(str)
+    df["athlete_id"] = normaliser_id(df["athlete_id"])
+    df["date"] = lire_dates(df["date"])
+    for col in ("kcal", "proteines_g", "glucides_g", "lipides_g"):
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+    df = df.dropna(subset=["date"])
+    if athlete_id is not None:
+        df = df[df["athlete_id"] == normaliser_id([athlete_id]).iloc[0]]
+    if jour is not None:
+        df = df[df["date"] == lire_dates([jour]).iloc[0]]
+    return df.sort_values(["date", "heure"]).reset_index(drop=True)
+
+
+def ajouter_repas(athlete_id, jour, heure: str, repas: str, kcal: float,
+                  proteines_g: float = 0, glucides_g: float = 0, lipides_g: float = 0) -> dict:
+    """Enregistre un repas sur disque. Retourne la ligne enregistrée."""
+    athlete = normaliser_id([athlete_id]).iloc[0]
+    if not athlete:
+        raise ErreurJournal("Aucun athlète sélectionné pour ce repas.")
+    if not kcal or kcal <= 0:
+        raise ErreurJournal("Indique l'apport du repas en kcal (supérieur à 0).")
+    ligne = {"id": uuid.uuid4().hex[:8], "athlete_id": athlete, "date": lire_dates([jour]).iloc[0],
+             "heure": heure, "repas": (repas or "").strip() or f"Repas de {heure}", "kcal": kcal,
+             "proteines_g": proteines_g, "glucides_g": glucides_g, "lipides_g": lipides_g}
+    tous = charger_repas()
+    tous = pd.concat([tous, pd.DataFrame([ligne])], ignore_index=True) if len(tous) else pd.DataFrame([ligne])
+    _ecrire_atomique(tous[COLONNES_REPAS], CHEMIN_REPAS)
+    return ligne
+
+
+def supprimer_repas(id_repas: str) -> None:
+    tous = charger_repas()
+    _ecrire_atomique(tous[tous["id"] != str(id_repas)][COLONNES_REPAS], CHEMIN_REPAS)
 
 
 # Noms acceptés pour chaque colonne du journal (normalisés : minuscules, sans accents,
@@ -135,14 +288,14 @@ def _norm_nom(s) -> str:
     return re.sub(r"[^a-z0-9]+", "_", s).strip("_")
 
 
-def lire_csv_robuste(contenu) -> pd.DataFrame:
+def lire_csv_robuste(contenu, **kw) -> pd.DataFrame:
     """Lit un CSV quel que soit le séparateur (, ; tabulation) et l'encodage (UTF-8, Excel/Latin-1)."""
     derniere = None
     for enc in ("utf-8-sig", "latin-1"):
         try:
             if hasattr(contenu, "seek"):
                 contenu.seek(0)
-            df = pd.read_csv(contenu, sep=None, engine="python", encoding=enc)
+            df = pd.read_csv(contenu, sep=None, engine="python", encoding=enc, **kw)
             if df.shape[1] >= 2:
                 return df
         except Exception as e:  # noqa: BLE001 - on tente l'encodage suivant
@@ -168,7 +321,8 @@ def importer_csv(contenu) -> tuple[pd.DataFrame, dict]:
     Ne modifie JAMAIS le journal si le fichier est incompatible ou ne contient aucune ligne
     valide. `rapport["statut"]` vaut "ok", "incompatible" ou "vide", avec un message clair."""
     actuel = charger_journal()
-    brut = lire_csv_robuste(contenu)
+    # Tout en texte : un identifiant « 007 » reste « 007 » (preparer_journal convertit les nombres).
+    brut = lire_csv_robuste(contenu, dtype=str)
     renomme, trouvees = reconnaitre_colonnes(brut)
     rapport = {"colonnes_fichier": [str(c) for c in brut.columns], "colonnes_reconnues": trouvees,
                "lignes_recues": int(len(brut))}
@@ -192,7 +346,7 @@ def importer_csv(contenu) -> tuple[pd.DataFrame, dict]:
         return actuel, rapport
 
     fusion, _ = preparer_journal(pd.concat([actuel, nouveau], ignore_index=True))
-    fusion.to_csv(CHEMIN_JOURNAL, index=False)
+    _ecrire_atomique(fusion, CHEMIN_JOURNAL)
     rapport["lignes_totales_journal"] = int(len(fusion))
     rapport["statut"] = "ok"
     sans_charge = [c for c in ("rpe", "duree_min") if c not in trouvees]

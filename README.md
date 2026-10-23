@@ -43,8 +43,8 @@ pip install -r requirements.txt
 # Une seule fois, avec internet : télécharge le modèle de détection posturale
 # en local pour que le dashboard n'ait plus besoin de réseau ensuite (utile
 # le jour de la démo si le wifi de la salle n'est pas fiable).
-# Inutile si computer_vision/artifacts/pose_landmarker_lite.task est déjà présent
-# (c'est le cas dans l'archive zip remise au jury).
+# Inutile si computer_vision/artifacts/pose_landmarker_full.task (~9 Mo, modèle précis)
+# est déjà présent. Le modèle « lite » sert de secours s'il est le seul disponible.
 python -m computer_vision.pose_analysis --setup
 
 streamlit run dashboard/app.py
@@ -153,10 +153,13 @@ python -m models.experiment_interaction   # ≈ 5 min (2 cœurs) -> experiment_i
 ## Robustesse aux données inédites
 
 `models/injury_risk.py` valide chaque vecteur d'entrée avant inférence
-(`valider_et_nettoyer_features`) : valeur manquante / non numérique -> imputée par le
-milieu du domaine d'entraînement ; valeur hors domaine -> clippée à la borne la plus
-proche ; valeur valide -> jamais modifiée. Le rapport de nettoyage est renvoyé dans la clé
-`qualite_donnees`. Test (5 scénarios) : `python -m models.test_robustesse`.
+(`valider_et_nettoyer_features`) : valeur manquante / non numérique -> imputée par sa
+valeur typique à l'entraînement (`VALEURS_TYPIQUES`, médianes : 0 blessure passée, ACWR 1,0,
+sommeil 7 h…) ; valeur hors domaine -> clippée à la borne la plus proche ; valeur valide ->
+jamais modifiée. Le rapport de nettoyage est renvoyé dans la clé `qualite_donnees`.
+Test : `python -m models.test_robustesse`.
+
+Convention : `deficit_calorique_pct` est POSITIF quand l'athlète mange moins que son besoin.
 
 ## Analyses avancées (importance, apprentissage, robustesse, calibration)
 
@@ -188,9 +191,12 @@ Choix de méthode (corrigés après tests, voir `models/test_sequence.py`) :
 - **Refus de conclure** si moins de 50 % des images sont détectées ou si aucun cycle n'est exploitable.
 
 Limites : démonstrateur 2D (une caméra), angles projetés dans le plan de l'image ; pas un outil médical
-certifié. Les tests utilisent des séries d'angles fabriquées pour vérifier la logique ; **la détection de
-pose réelle sur de vraies vidéos n'a pas pu être testée dans l'environnement de développement** (modèle de
-pose non téléchargeable sans internet) : à valider sur 2-3 vidéos filmées par l'équipe avant la démo.
+certifié. Détection en **mode vidéo** de MediaPipe (la personne est suivie d'une image à l'autre et les
+points sont lissés) avec le modèle « full ». Sur une vidéo de match télévisé (plusieurs joueurs, plans
+changeants), le tremblement des points est divisé par 2 environ par rapport à l'ancienne détection image
+par image ; ce type de vidéo reste toutefois inadapté (petits joueurs, foule, gros plans). **Filmer pour la
+démo : un seul athlète, corps entier, de profil, caméra fixe, 5 à 15 s.** Les tests vérifient la logique sur
+des séries d'angles fabriquées ; `verifier_demo.py` contrôle en plus les photos placées dans `demo_media/`.
 
 ## Évaluation sur jeu de données public
 
@@ -231,8 +237,9 @@ Import d'un jeu de données public : `adapter_csv_externe(chemin, correspondance
 ## Test en direct sur un CSV inédit (jour de la finale)
 `models/testeur_csv.py` évalue le modèle sur un fichier jamais vu, sans rien deviner en silence : il affiche
 l'association colonnes du fichier -> 10 variables du modèle (noms exacts, synonymes FR/EN, approximation prudente, ou
-`--mapping`), signale les variables absentes, applique le même nettoyage qu'en production (manquant -> milieu du domaine,
-hors domaine -> borné, avec compteurs), puis donne ROC-AUC avec IC95 bootstrap, précision/rappel, rappel parmi les 20 %
+`--mapping`), signale les variables absentes, convertit et annonce les unités courantes (sommeil en minutes, intensité
+sur 10 ou 100, bilan calorique au lieu d'un déficit), applique le même nettoyage qu'en production (manquant -> valeur
+typique, hors domaine -> borné, avec compteurs), accepte une étiquette en nombre de blessures (> 0 = blessure), puis donne ROC-AUC avec IC95 bootstrap, précision/rappel, rappel parmi les 20 %
 les plus à risque, Brier et fiabilité par tranches (et MAE/RMSE/R² si une colonne fatigue existe). Il lit `;` ou `,`,
 la virgule décimale et les accents (UTF-8 ou Latin-1), et refuse proprement une étiquette illisible ou un fichier sans
 aucune colonne reconnue (code de sortie 2, message en français).

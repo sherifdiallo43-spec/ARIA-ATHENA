@@ -43,30 +43,30 @@ def generer_signal_ecg(hr_bpm: float, duree_s: float = 3.0, fe_hz: int = 250,
 
 
 def simuler_constantes_vitales(profil: dict, etat_precedent: dict | None = None) -> dict:
-    """Simule une nouvelle mesure des constantes vitales (marche aléatoire bornée)."""
+    """Simule une nouvelle mesure des constantes vitales.
+
+    Marche aléatoire RAPPELÉE vers un état d'équilibre qui dépend de l'intensité d'effort
+    (processus d'Ornstein-Uhlenbeck discret) : les valeurs fluctuent de façon réaliste autour
+    de leur cible au lieu de dériver sans fin (avant : FC à 205 et SpO2 à 92 après une minute)."""
     intensite = profil.get("intensite_effort", 0.5)
+    cible = {
+        "fc": 65 + intensite * 90, "spo2": 98.0 - intensite * 2, "temperature": 36.8 + intensite * 0.8,
+        "lactate": 1.0 + intensite * 5, "glucose": 95.0 - intensite * 10,
+    }
+    rappel = 0.1   # part de l'écart à la cible corrigée à chaque mesure
 
     if etat_precedent is None:
-        base_hr = 65 + intensite * 90
-        etat_precedent = {
-            "fc": base_hr, "spo2": 98.0, "temperature": 36.8,
-            "lactate": 1.2, "glucose": 95.0,
-        }
+        etat_precedent = {**cible, "lactate": 1.2}
 
-    fc = etat_precedent["fc"] + np.random.normal(0, 2.5) + (intensite - 0.5) * 3
-    fc = float(np.clip(fc, 45, 205))
+    def _pas(cle, bruit, lo, hi):
+        x = etat_precedent[cle]
+        return float(np.clip(x + rappel * (cible[cle] - x) + np.random.normal(0, bruit), lo, hi))
 
-    spo2 = etat_precedent["spo2"] + np.random.normal(0, 0.3) - intensite * 0.05
-    spo2 = float(np.clip(spo2, 88, 100))
-
-    temperature = etat_precedent["temperature"] + np.random.normal(0, 0.04) + intensite * 0.01
-    temperature = float(np.clip(temperature, 35.5, 40.0))
-
-    lactate = etat_precedent["lactate"] + np.random.normal(0, 0.15) + intensite * 0.25
-    lactate = float(np.clip(lactate, 0.5, 14.0))
-
-    glucose = etat_precedent["glucose"] + np.random.normal(0, 1.2) - intensite * 0.3
-    glucose = float(np.clip(glucose, 60, 180))
+    fc = _pas("fc", 2.5, 45, 205)
+    spo2 = _pas("spo2", 0.15, 88, 100)   # bruit faible : pas de fausse alerte « SpO2 < 94 % » au repos
+    temperature = _pas("temperature", 0.04, 35.5, 40.0)
+    lactate = _pas("lactate", 0.15, 0.5, 14.0)
+    glucose = _pas("glucose", 1.2, 60, 180)
 
     return {
         "fc": round(fc, 1), "spo2": round(spo2, 1), "temperature": round(temperature, 2),

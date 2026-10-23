@@ -4,22 +4,40 @@
 import pandas as pd
 
 
+def charge_quotidienne(df_charge: pd.DataFrame, jours: int = 28) -> pd.Series:
+    """Charge par JOUR CALENDAIRE sur les `jours` derniers jours (au plus).
+
+    Plusieurs séances le même jour sont additionnées et un jour sans séance compte
+    comme repos (0). La fenêtre ne remonte pas avant la première séance connue :
+    même convention que `data.donnees_reelles.features_a_date`."""
+    if df_charge.empty:
+        return pd.Series(dtype=float)
+    if "date" not in df_charge.columns:
+        # Série sans dates (scénario de démo) : une ligne = un jour consécutif.
+        return pd.to_numeric(df_charge["charge"], errors="coerce").fillna(0).astype(float).tail(jours)
+    dates = pd.to_datetime(df_charge["date"]).dt.normalize()
+    par_jour = pd.to_numeric(df_charge["charge"], errors="coerce").fillna(0).groupby(dates).sum()
+    fin = par_jour.index.max()
+    debut = max(par_jour.index.min(), fin - pd.Timedelta(days=jours - 1))
+    return par_jour.reindex(pd.date_range(debut, fin, freq="D"), fill_value=0.0).astype(float)
+
+
 def calculer_acwr(df_charge: pd.DataFrame) -> dict:
     """
-    Calcule l'Acute:Chronic Workload Ratio (ACWR).
+    Calcule l'Acute:Chronic Workload Ratio (ACWR) sur des jours calendaires :
+    aiguë = moyenne des 7 derniers jours, chronique = moyenne des 28 derniers.
     Zones de risque (littérature sportive - Gabbett et al.) :
         < 0.8   -> sous-entraînement (perte de forme)
         0.8-1.3 -> zone optimale ("sweet spot")
         1.3-1.5 -> zone de prudence
         > 1.5   -> risque élevé de blessure
     """
-    if df_charge.empty:
+    serie = charge_quotidienne(df_charge)
+    if serie.empty:
         aigue, chronique = 0.0, 0.0
     else:
-        aigue = df_charge.tail(7)["charge"].mean()
-        chronique = df_charge.tail(28)["charge"].mean()
-        aigue = 0.0 if pd.isna(aigue) else aigue
-        chronique = 0.0 if pd.isna(chronique) else chronique
+        aigue = float(serie.tail(7).mean())
+        chronique = float(serie.mean())
     acwr = aigue / chronique if chronique > 0 else 0
 
     if acwr < 0.8:
@@ -33,7 +51,7 @@ def calculer_acwr(df_charge: pd.DataFrame) -> dict:
 
     return {
         "acwr": round(acwr, 2), "aigue": round(aigue, 1), "chronique": round(chronique, 1),
-        "zone": zone, "couleur": couleur,
+        "zone": zone, "couleur": couleur, "jours_historique": int(len(serie)),
     }
 
 

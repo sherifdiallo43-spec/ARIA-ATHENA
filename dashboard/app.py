@@ -3,8 +3,11 @@
 # Ligue Intelligence Artificielle
 # Lancement : streamlit run dashboard/app.py   (depuis la racine du projet)
 
+import hashlib
+import shutil
 import sys
 import tempfile
+import zlib
 from pathlib import Path
 from collections import deque
 from datetime import datetime
@@ -34,6 +37,8 @@ from reports.pdf_report import generer_rapport_pdf
 from data.donnees_reelles import (
     COLONNES as COLONNES_JOURNAL, DESCRIPTION_COLONNES, charger_journal, ajouter_entree,
     importer_csv, gabarit_csv, risque_actuel, evaluer_sur_donnees_reelles, DOSSIER_REEL,
+    ErreurJournal, ajouter_seance, charge_28j, moyennes_7j, charger_repas, ajouter_repas, supprimer_repas,
+    COLONNES_REPAS,
 )
 from dashboard.theme import (
     PALETTE, MODELE_PLOTLY, injecter_theme, marque_barre_laterale, en_tete,
@@ -78,6 +83,19 @@ def image(img, **kw):
     return _pleine_largeur(st.image, img, **kw)
 
 
+def _flash(zone: str, message: str, genre: str = "success"):
+    """Garde un message pour l'exécution suivante : st.rerun() efface sinon tout ce qui
+    vient d'être affiché (d'où l'impression que « rien ne se passe » après un enregistrement)."""
+    st.session_state[f"flash_{zone}"] = (genre, message)
+
+
+def _afficher_flash(zone: str):
+    if f"flash_{zone}" in st.session_state:
+        genre, message = st.session_state.pop(f"flash_{zone}")
+        getattr(st, genre)(message)
+        st.toast(message)
+
+
 @st.cache_data(show_spinner="Chargement de l'étude scientifique…")
 def etude_scientifique_en_cache() -> dict:
     """Résultats pré-calculés de l'étude (lus une seule fois par session)."""
@@ -107,16 +125,13 @@ injecter_theme()
 for cle, defaut in [
     ("historique_vitals", deque(maxlen=200)),
     ("dernier_etat_vital", None),
-    ("repas_journee", pd.DataFrame(columns=["Heure", "Repas", "Kcal", "Protéines (g)", "Glucides (g)", "Lipides (g)"])),
     ("simulation_active", False),
-    ("historique_charge", None),
+    ("seances_simulees", []),   # séances ajoutées en mode simulation (non écrites sur disque)
     ("micronutriments", None),
 ]:
     if cle not in st.session_state:
         st.session_state[cle] = defaut
 
-if st.session_state.historique_charge is None:
-    st.session_state.historique_charge = generer_historique_charge()
 if st.session_state.micronutriments is None:
     st.session_state.micronutriments = generer_micronutriments_simules()
 
@@ -139,14 +154,40 @@ with st.sidebar:
     })
     cle = nom_athlete.replace(" ", "_")
 
+    # Source de la charge, des repas et du sommeil : la simulation de démo, ou le journal
+    # réel d'un athlète (onglet Données Réelles). Les séances saisies y sont alors écrites.
+    try:
+        journal_global, erreur_journal = charger_journal(), None
+    except ErreurJournal as err:
+        journal_global, erreur_journal = pd.DataFrame(columns=COLONNES_JOURNAL), str(err)
+    ids_journal = sorted(journal_global["athlete_id"].unique()) if len(journal_global) else []
+    if st.session_state.get("source_donnees") not in [None, "Simulation (démo)", *ids_journal]:
+        del st.session_state["source_donnees"]
+    source_donnees = st.selectbox(
+        "Données d'entraînement", ["Simulation (démo)"] + ids_journal, key="source_donnees",
+        format_func=lambda s: s if s.startswith("Simulation") else f"Journal réel : {s}",
+        help="Choisis un identifiant du journal (onglet Données Réelles) pour utiliser ses vraies "
+             "séances : l'ACWR, le sommeil et la FC de repos en sont alors calculés.",
+    )
+    id_reel = None if source_donnees.startswith("Simulation") else source_donnees
+    if erreur_journal:
+        st.error(erreur_journal)
+    moy_reelles = moyennes_7j(journal_global, id_reel) if id_reel else {}
+    cle_mesures = cle if id_reel is None else f"{cle}_{id_reel}"
+
     sexe = st.radio("Sexe", ["Homme", "Femme"], horizontal=True)
     age = st.number_input("Âge", min_value=10, max_value=60, value=int(ref["age"]), key=f"age_{cle}")
     poids = st.number_input("Poids (kg)", min_value=30.0, max_value=150.0, value=float(ref["poids"]), key=f"poids_{cle}")
     taille = st.number_input("Taille (cm)", min_value=120.0, max_value=220.0, value=float(ref["taille"]), key=f"taille_{cle}")
 
     st.subheader("Données pour l'IA prédictive")
-    fc_repos = st.number_input("FC de repos (bpm)", min_value=35, max_value=100, value=60, key=f"fc_{cle}")
-    sommeil_h = st.slider("Sommeil moyen (h/nuit)", 3.0, 10.0, float(ref["sommeil_h"]), 0.1, key=f"sommeil_{cle}")
+    # Avec un journal réel : moyenne des 7 derniers jours saisis (si disponible), bornée aux plages des widgets.
+    fc_defaut = moy_reelles.get("fc_repos", np.nan)
+    fc_defaut = int(np.clip(round(fc_defaut), 35, 100)) if np.isfinite(fc_defaut) else 60
+    sommeil_defaut = moy_reelles.get("sommeil_h", np.nan)
+    sommeil_defaut = float(np.clip(round(sommeil_defaut, 1), 3.0, 10.0)) if np.isfinite(sommeil_defaut) else float(ref["sommeil_h"])
+    fc_repos = st.number_input("FC de repos (bpm)", min_value=35, max_value=100, value=fc_defaut, key=f"fc_{cle_mesures}")
+    sommeil_h = st.slider("Sommeil moyen (h/nuit)", 3.0, 10.0, sommeil_defaut, 0.1, key=f"sommeil_{cle_mesures}")
     historique_blessures = st.number_input("Blessures (12 derniers mois)", min_value=0, max_value=10,
                                            value=int(ref["historique_blessures"]), key=f"blessures_{cle}")
 
@@ -176,18 +217,39 @@ profil_athlete = {
 
 
 # CALCULS PARTAGÉS (utilisés par plusieurs onglets)
-df_charge = st.session_state.historique_charge
+aujourdhui = datetime.now().date()
+
+
+def charge_simulee(nom: str) -> pd.DataFrame:
+    """Historique simulé propre à chaque athlète et STABLE (même graine à chaque rafraîchissement),
+    plus les séances ajoutées pendant la session."""
+    df = generer_historique_charge(graine=zlib.crc32(nom.encode("utf-8")))
+    ajouts = [s for s in st.session_state.seances_simulees if s["athlete"] == nom]
+    if ajouts:
+        df = pd.concat([df, pd.DataFrame(ajouts)[["date", "charge"]]], ignore_index=True)
+    return df
+
+
+df_charge = charge_28j(journal_global, id_reel) if id_reel else charge_simulee(nom_athlete)
 acwr_info = calculer_acwr(df_charge)
 bmr_tdee = calculer_bmr_tdee(sexe, poids, taille, age, facteur_activite)
-kcal_consommees = st.session_state.repas_journee["Kcal"].sum() if not st.session_state.repas_journee.empty else 0
+# Repas du jour, enregistrés sur disque pour l'athlète courant (identifiant du journal, sinon nom).
+athlete_courant = id_reel or nom_athlete
+try:
+    repas_du_jour, erreur_repas = charger_repas(athlete_courant, aujourdhui), None
+except ErreurJournal as err:
+    repas_du_jour, erreur_repas = pd.DataFrame(columns=COLONNES_REPAS), str(err)
+kcal_consommees = float(repas_du_jour["kcal"].sum()) if len(repas_du_jour) else 0
 bilan_calorique = {"tdee": bmr_tdee["tdee"], "kcal_consommees": kcal_consommees,
-                   "renseigne": not st.session_state.repas_journee.empty}
+                   "renseigne": len(repas_du_jour) > 0}
 df_micro = st.session_state.micronutriments
 
 vitals_courants = st.session_state.dernier_etat_vital or simuler_constantes_vitales(profil_athlete)
 imc = poids / ((taille / 100) ** 2)
+# Convention du modèle (train_injury_model) : déficit POSITIF quand l'athlète mange MOINS que son besoin.
+# L'ancien calcul (mangé - besoin) inversait le signe : manger moins faisait baisser le risque affiché.
 deficit_calorique_pct = (
-    (bilan_calorique["kcal_consommees"] - bilan_calorique["tdee"]) / bilan_calorique["tdee"] * 100
+    (bilan_calorique["tdee"] - bilan_calorique["kcal_consommees"]) / bilan_calorique["tdee"] * 100
     if bilan_calorique["tdee"] > 0 and bilan_calorique["renseigne"] else 0
 )
 
@@ -217,7 +279,8 @@ alertes = moteur_de_decision(vitals_courants, acwr_info, bilan_calorique, df_mic
 
 
 # EN-TÊTE (après les calculs : il affiche le statut de l'athlète)
-en_tete(nom_athlete, profil_risque, acwr_info, mode_simulation)
+en_tete(nom_athlete, profil_risque, acwr_info, mode_simulation,
+        source=f"Données réelles : {id_reel}" if id_reel else "Simulation")
 
 
 # ONGLETS PRINCIPAUX
@@ -305,13 +368,41 @@ with onglet2:
         fig_charge.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", height=380)
         tracer(fig_charge)
 
-    with st.expander("Ajouter une séance du jour"):
-        nouvelle_charge = st.slider("Charge de la séance (Session-RPE x durée)", 0, 900, 400)
-        if st.button("Enregistrer la séance"):
-            nouvelle_ligne = pd.DataFrame({"date": [datetime.now().date()], "charge": [nouvelle_charge]})
-            st.session_state.historique_charge = pd.concat([st.session_state.historique_charge, nouvelle_ligne], ignore_index=True)
-            st.success("Séance enregistrée. Le calcul de l'ACWR a été mis à jour.")
+    if acwr_info["jours_historique"] < 28:
+        st.caption(f"ACWR provisoire : {acwr_info['jours_historique']} jour(s) d'historique sur les 28 de la "
+                   "charge chronique.")
+
+    st.markdown("#### Enregistrer une séance")
+    _afficher_flash("seance")
+    if id_reel:
+        st.caption(f"La séance est écrite dans le journal réel de **{id_reel}** (onglet Données Réelles).")
+    else:
+        st.caption("Mode simulation : la séance est gardée pendant la session. Pour l'enregistrer sur disque, "
+                   "choisis un athlète du journal dans « Données d'entraînement » (barre latérale).")
+    with st.form("form_seance", clear_on_submit=True):
+        s1, s2, s3 = st.columns(3)
+        date_seance = s1.date_input("Date", value=aujourdhui, max_value=aujourdhui, format="DD/MM/YYYY")
+        rpe_seance = s2.slider("Effort perçu (RPE, 0-10)", 0, 10, 6)
+        duree_seance = s3.number_input("Durée (min)", min_value=0, max_value=300, value=60, step=5)
+        st.caption("Charge de la séance = RPE × durée (méthode sRPE de Foster). Deux séances le même jour s'additionnent.")
+        seance_validee = st.form_submit_button("Enregistrer la séance")
+    if seance_validee:
+        charge_seance = rpe_seance * duree_seance
+        try:
+            if duree_seance <= 0:
+                raise ErreurJournal("Durée nulle : indique la durée de la séance en minutes.")
+            if id_reel:
+                journal_maj, _ = ajouter_seance(id_reel, date_seance, rpe_seance, duree_seance)
+                acwr_apres = calculer_acwr(charge_28j(journal_maj, id_reel))
+            else:
+                st.session_state.seances_simulees.append(
+                    {"athlete": nom_athlete, "date": date_seance, "charge": float(charge_seance)})
+                acwr_apres = calculer_acwr(charge_simulee(nom_athlete))
+            _flash("seance", f"Séance du {date_seance:%d/%m} enregistrée : charge {charge_seance} "
+                             f"({rpe_seance} × {duree_seance} min). ACWR : {acwr_info['acwr']} → {acwr_apres['acwr']}.")
             st.rerun()
+        except ErreurJournal as err:
+            st.error(str(err))
 
 
 # ONGLET 3 : NUTRITION & MÉTABOLISME
@@ -324,28 +415,50 @@ with onglet3:
                   delta=f"{int(kcal_consommees - bmr_tdee['tdee'])} kcal vs objectif")
 
     st.markdown("#### Enregistrer un repas")
+    st.caption(f"Repas enregistrés pour **{athlete_courant}**, le {aujourdhui:%d/%m/%Y}. Ils sont gardés sur "
+               "l'ordinateur (fichier data/real/repas.csv).")
+    _afficher_flash("repas")
+    if erreur_repas:
+        st.error(erreur_repas)
     with st.form("form_repas", clear_on_submit=True):
         c1, c2, c3, c4, c5 = st.columns(5)
-        nom_repas = c1.text_input("Repas", placeholder="Ex : Petit-déjeuner")
+        nom_repas = c1.text_input("Repas (facultatif)", placeholder="Ex : Petit-déjeuner")
         kcal_repas = c2.number_input("Kcal", min_value=0, value=0, step=10)
         proteines = c3.number_input("Protéines (g)", min_value=0, value=0, step=1)
         glucides = c4.number_input("Glucides (g)", min_value=0, value=0, step=1)
         lipides = c5.number_input("Lipides (g)", min_value=0, value=0, step=1)
         valider = st.form_submit_button("Enregistrer le repas")
-        if valider and nom_repas:
-            nouvelle_entree = pd.DataFrame({
-                "Heure": [datetime.now().strftime("%H:%M")], "Repas": [nom_repas], "Kcal": [kcal_repas],
-                "Protéines (g)": [proteines], "Glucides (g)": [glucides], "Lipides (g)": [lipides],
-            })
-            st.session_state.repas_journee = pd.concat([st.session_state.repas_journee, nouvelle_entree], ignore_index=True)
-            st.success(f"Repas « {nom_repas} » enregistré.")
+    if valider:
+        try:
+            ligne = ajouter_repas(athlete_courant, aujourdhui, datetime.now().strftime("%H:%M"), nom_repas,
+                                  kcal_repas, proteines, glucides, lipides)
+            _flash("repas", f"Repas « {ligne['repas']} » enregistré ({kcal_repas} kcal). "
+                            f"Total du jour : {int(kcal_consommees + kcal_repas)} kcal.")
+            st.rerun()
+        except ErreurJournal as err:
+            st.error(str(err))
 
-    if not st.session_state.repas_journee.empty:
+    if len(repas_du_jour):
         st.markdown("#### Repas enregistrés aujourd'hui")
-        tableau(st.session_state.repas_journee)
+        repas_affiches = repas_du_jour.rename(columns={
+            "heure": "Heure", "repas": "Repas", "kcal": "Kcal", "proteines_g": "Protéines (g)",
+            "glucides_g": "Glucides (g)", "lipides_g": "Lipides (g)"})
+        tableau(repas_affiches[["Heure", "Repas", "Kcal", "Protéines (g)", "Glucides (g)", "Lipides (g)"]])
+        d1, d2 = st.columns([3, 1])
+        a_supprimer = d1.selectbox(
+            "Corriger une erreur de saisie", repas_du_jour["id"].tolist(), key="repas_a_supprimer",
+            format_func=lambda i: "{heure} · {repas} · {kcal:.0f} kcal".format(
+                **repas_du_jour.set_index("id").loc[i].to_dict()))
+        if d2.button("Supprimer ce repas"):
+            try:
+                supprimer_repas(a_supprimer)
+                _flash("repas", "Repas supprimé.", "info")
+                st.rerun()
+            except ErreurJournal as err:
+                st.error(str(err))
         col_macro1, col_macro2 = st.columns(2)
         with col_macro1:
-            total_macros = st.session_state.repas_journee[["Protéines (g)", "Glucides (g)", "Lipides (g)"]].sum()
+            total_macros = repas_affiches[["Protéines (g)", "Glucides (g)", "Lipides (g)"]].sum()
             fig_macros = px.pie(names=total_macros.index, values=total_macros.values, template=MODELE_PLOTLY,
                                  title="Répartition des macronutriments",
                                  color_discrete_sequence=["#1B6E8C", "#5B9BB0", "#FFB703"])
@@ -455,9 +568,12 @@ with onglet5:
             m_1, m_2 = st.columns(2)
             m_1.metric("ROC-AUC (test)", f"{meta['metrics'].get('injury_model_auc', 0):.3f}")
             m_2.metric("MAE fatigue (/10)", f"{meta['metrics'].get('fatigue_model_mae', 0):.3f}")
-            st.caption(f"Gradient Boosting (scikit-learn), profondeur 2, entraîné sur "
+            profondeur = meta.get("hyperparametres", {}).get("injury_risk_model", {}).get("max_depth", "?")
+            st.caption(f"Gradient Boosting (scikit-learn), profondeur {profondeur}, entraîné sur "
                        f"{meta.get('n_train_samples')} profils simulés. Le détail des facteurs propres "
                        f"à cet athlète est présenté plus bas.")
+        if meta.get("avertissement_version"):
+            st.warning(meta["avertissement_version"])
 
     with col_f2:
         st.markdown("#### AI Coach — Recommandations")
@@ -526,18 +642,25 @@ with onglet6:
     st.subheader("Analyse biomécanique par vision par ordinateur")
     st.caption("Détection posturale via MediaPipe Pose, calibrée par type de mouvement — Football, Basketball, Athlétisme.")
 
-    from computer_vision.pose_analysis import MOUVEMENTS_REFERENCE, modele_disponible_localement, telecharger_modele
+    from computer_vision.pose_analysis import (
+        MOUVEMENTS_REFERENCE, modele_disponible_localement, telecharger_modele, _charger_detecteur, nom_modele,
+    )
 
     if not modele_disponible_localement():
         st.warning(
             "Le modèle de détection posturale n'est pas encore présent en local sur cette machine "
-            "(il sera téléchargé une seule fois, ~5 Mo, à la première analyse — connexion requise). "
+            "(il sera téléchargé une seule fois, ~9 Mo, à la première analyse — connexion requise). "
             "Pour une démo sans dépendre du wifi le jour J : lancer une fois "
             "`python -m computer_vision.pose_analysis --setup` avant l'événement."
         )
+    else:
+        try:
+            _charger_detecteur()   # préchauffage (~2 s, une seule fois) : la 1re analyse devant le jury est immédiate
+        except Exception:  # noqa: BLE001 - l'erreur sera affichée à la première analyse
+            pass
 
     if not modele_disponible_localement():
-        if st.button("Télécharger le modèle de détection (~5 Mo)"):
+        if st.button("Télécharger le modèle de détection (~9 Mo)"):
             try:
                 with st.spinner("Téléchargement en cours..."):
                     telecharger_modele()
@@ -552,37 +675,52 @@ with onglet6:
     with col_choix2:
         st.caption("La zone d'angle « correcte » (genou/hanche/tronc) dépend du mouvement : un squat et une foulée de course n'ont pas la même posture idéale.")
 
-    fichier_image = st.file_uploader("Image de l'athlète (JPG/PNG)", type=["jpg", "jpeg", "png"])
+    st.caption("Squelette : cuisse, tibia et tronc en **bleu** si l'angle est dans la plage de référence du "
+               "mouvement, **orange** s'il en est proche (moins de 15°), **rouge** sinon. Les points mal vus ne "
+               f"sont pas dessinés. Modèle de pose : {nom_modele() if modele_disponible_localement() else 'absent'}.")
+    fichier_image = st.file_uploader("Image de l'athlète (JPG/PNG/WebP)", type=["jpg", "jpeg", "png", "webp"])
 
     if fichier_image is not None:
         import cv2
-        from computer_vision.pose_analysis import analyser_image, dessiner_squelette
+        from computer_vision.pose_analysis import analyser_image, dessiner_squelette, preparer_image
 
-        octets_image = np.frombuffer(fichier_image.read(), np.uint8)
-        image_bgr = cv2.imdecode(octets_image, cv2.IMREAD_COLOR)
+        octets_photo = fichier_image.getvalue()
+        image_bgr = cv2.imdecode(np.frombuffer(octets_photo, np.uint8), cv2.IMREAD_COLOR)
 
         resultat = None
         if image_bgr is None:
             st.error("Image illisible ou fichier corrompu. Réessayez avec un JPG/PNG valide.")
         else:
-            try:
-                with st.spinner("Analyse posturale en cours..."):
-                    resultat = analyser_image(image_bgr, mouvement=mouvement_analyse)
-            except Exception as e:
-                st.error(
-                    "Le modèle de détection posturale n'a pas pu être chargé (probablement pas de "
-                    "connexion internet pour le premier téléchargement). Lancer "
-                    f"`python -m computer_vision.pose_analysis --setup` avec le wifi puis réessayer. Détail : {e}"
-                )
+            image_bgr = preparer_image(image_bgr)
+            # Gardé en session : changer de mouvement ou toucher un curseur ne relance pas la détection.
+            cle_photo = (hashlib.md5(octets_photo).hexdigest(), mouvement_analyse)
+            cache_photo = st.session_state.get("analyse_photo")
+            if cache_photo and cache_photo["cle"] == cle_photo:
+                resultat = cache_photo["resultat"]
+            else:
+                try:
+                    with st.spinner("Analyse posturale en cours..."):
+                        resultat = analyser_image(image_bgr, mouvement=mouvement_analyse)
+                    st.session_state["analyse_photo"] = {"cle": cle_photo, "resultat": resultat}
+                except Exception as e:
+                    st.error(
+                        "Le modèle de détection posturale n'a pas pu être chargé (probablement pas de "
+                        "connexion internet pour le premier téléchargement). Lancer "
+                        f"`python -m computer_vision.pose_analysis --setup` avec le wifi puis réessayer. Détail : {e}"
+                    )
 
         if resultat is None:
             pass  # erreur déjà affichée ; les autres onglets restent utilisables
         elif not resultat["detecte"]:
             st.warning("Aucune silhouette détectée sur cette image. Essayez une image où le corps entier est visible.")
+        elif not resultat.get("fiable", True):
+            image(cv2.cvtColor(dessiner_squelette(image_bgr, resultat["landmarks_bruts"]), cv2.COLOR_BGR2RGB),
+                  caption="Squelette détecté (points mal vus masqués)")
+            st.warning(resultat["message"])
         else:
             col_v1, col_v2 = st.columns([1.1, 1])
             with col_v1:
-                image_annotee = dessiner_squelette(image_bgr, resultat["landmarks_bruts"])
+                image_annotee = dessiner_squelette(image_bgr, resultat["landmarks_bruts"], mouvement_analyse)
                 image(cv2.cvtColor(image_annotee, cv2.COLOR_BGR2RGB), caption="Squelette détecté")
             with col_v2:
                 st.metric("Angle du genou", f"{resultat['angle_genou']}°")
@@ -614,28 +752,30 @@ with onglet6:
         "Filmer le corps entier, caméra fixe, bonne lumière — de profil pour genou/hanche, de face ou "
         "de dos pour la symétrie. Démonstrateur 2D, pas un outil médical certifié."
     )
-    fichier_video = st.file_uploader("Vidéo de l'athlète (MP4/MOV/AVI)", type=["mp4", "mov", "avi"], key="upload_video_seq")
+    fichier_video = st.file_uploader("Vidéo de l'athlète (MP4/MOV/AVI/M4V/WebM)",
+                                     type=["mp4", "mov", "avi", "m4v", "webm"], key="upload_video_seq")
     if fichier_video is not None:
-        from computer_vision.analyse_sequence import analyser_video, generer_video_annotee
+        import cv2
+        from computer_vision.analyse_sequence import extraire_pose_video, analyser_series, annoter_images, encoder_video
         octets_video = fichier_video.getvalue()
-        type_video = {".mov": "video/quicktime", ".avi": "video/x-msvideo"}.get(
-            Path(fichier_video.name).suffix.lower(), "video/mp4")
-        # L'analyse (~10-20 s) est gardée en session : toucher un curseur ne la relance plus.
-        cle_video = (fichier_video.name, len(octets_video), mouvement_analyse)
+        # 1. Détection de la pose (10-20 s) : UNE fois par vidéo, gardée en session (clé = empreinte du
+        #    fichier). Changer de mouvement ne relance que le calcul des angles et le dessin : instantané.
+        empreinte_video = hashlib.md5(octets_video).hexdigest()
         cache_video = st.session_state.get("analyse_video")
-        if not cache_video or cache_video["cle"] != cle_video:
+        if not cache_video or cache_video["cle"] != empreinte_video:
             with tempfile.NamedTemporaryFile(suffix=Path(fichier_video.name).suffix, delete=False) as tmp_video:
                 tmp_video.write(octets_video)
                 chemin_tmp_video = tmp_video.name
-            cache_video = {"cle": cle_video, "resultat": None, "annotee": None, "erreur": None}
+            cache_video = {"cle": empreinte_video, "extraction": None, "originale": None, "annotees": {}, "erreur": None}
             try:
-                barre = st.progress(0.0, text="Analyse de la séquence en cours…")
-                resultat_seq = analyser_video(chemin_tmp_video, mouvement=mouvement_analyse,
-                                              rappel_progression=lambda p: barre.progress(min(1.0, p)))
-                barre.progress(1.0, text="Préparation de la vidéo annotée…")
-                cache_video["annotee"] = generer_video_annotee(chemin_tmp_video, resultat_seq["landmarks_par_image"])
-                resultat_seq.pop("landmarks_par_image", None)
-                cache_video["resultat"] = resultat_seq
+                barre = st.progress(0.0, text="Détection de la pose, image par image…")
+                extraction = extraire_pose_video(
+                    chemin_tmp_video, rappel_progression=lambda p: barre.progress(
+                        p, text=f"Détection de la pose, image par image… {p:.0%}"))
+                barre.progress(1.0, text="Préparation des vidéos…")
+                cache_video["extraction"] = extraction
+                # Vidéo d'origine réencodée (640 px, WebM) : un MOV HEVC d'iPhone devient lisible partout.
+                cache_video["originale"] = encoder_video(extraction["images"], extraction["fps"])
                 barre.empty()
             except ValueError as e:
                 cache_video["erreur"] = f"Vidéo non exploitable : {e}"
@@ -646,23 +786,50 @@ with onglet6:
                 Path(chemin_tmp_video).unlink(missing_ok=True)
             st.session_state["analyse_video"] = cache_video
 
+        # 2. Angles, score et squelette annoté pour le mouvement choisi (rapide, gardé par mouvement).
+        extraction, resultat_seq, annotees = cache_video["extraction"], None, None
+        if extraction is not None:
+            resultat_seq = analyser_series(extraction["serie"], extraction["fps"], mouvement_analyse)
+            resultat_seq["fps"] = round(extraction["fps"], 1)
+            if mouvement_analyse not in cache_video["annotees"]:
+                images_annotees = annoter_images(extraction["images"], extraction["landmarks"], mouvement_analyse)
+                cache_video["annotees"][mouvement_analyse] = {
+                    "images": images_annotees, "video": encoder_video(images_annotees, extraction["fps"])}
+            annotees = cache_video["annotees"][mouvement_analyse]
+            duree_totale = extraction.get("duree_video_s") or 0
+            if duree_totale > 15.5:
+                st.info(f"Vidéo de {duree_totale:.0f} s : seules les 15 premières secondes sont analysées. "
+                        "Couper la vidéo autour du geste à analyser.")
+
         col_vid1, col_vid2 = st.columns(2)
         with col_vid1:
             st.markdown("**Vidéo d'origine**")
-            st.video(octets_video, format=type_video)
-            if type_video != "video/mp4":
-                st.caption("Format MOV/AVI : certains navigateurs ne savent pas le lire. L'analyse, elle, fonctionne.")
+            if cache_video["originale"]:
+                st.video(cache_video["originale"][0], format=cache_video["originale"][1])
+            else:
+                st.video(octets_video)
         with col_vid2:
             st.markdown("**Squelette détecté (images analysées)**")
-            if cache_video["annotee"]:
-                octets_annotes, mime_annote = cache_video["annotee"]
-                st.video(octets_annotes, format=mime_annote, loop=True, autoplay=True, muted=True)
-            elif cache_video["erreur"] is None:
+            if annotees and annotees["video"]:
+                st.video(annotees["video"][0], format=annotees["video"][1], loop=True, autoplay=True, muted=True)
+            elif annotees:
                 st.caption("Vidéo annotée indisponible (aucun encodeur vidéo sur cette machine) : "
-                           "les mesures ci-dessous restent valables.")
+                           "le curseur ci-dessous montre chaque image analysée.")
+        if annotees:
+            # Toujours disponible : arrêter sur une image précise pour la commenter devant le jury.
+            n_images = len(annotees["images"])
+            c_img, c_txt = st.columns([1, 1])
+            with c_img:
+                num_image = st.slider("Parcourir les images analysées", 1, n_images, 1, key=f"image_{empreinte_video}")
+                t_image = extraction["serie"]["t"].iloc[num_image - 1]
+                image(cv2.cvtColor(annotees["images"][num_image - 1], cv2.COLOR_BGR2RGB),
+                      caption=f"Image {num_image}/{n_images} · t = {t_image:.1f} s")
+            with c_txt:
+                n_detectees = sum(lm is not None for lm in extraction["landmarks"])
+                st.caption(f"Modèle de pose : {extraction['modele']}, en mode vidéo (la personne est suivie "
+                           f"d'une image à l'autre). Silhouette détectée sur {n_detectees} images sur {n_images}.")
         if cache_video["erreur"]:
             st.error(cache_video["erreur"])
-        resultat_seq = cache_video["resultat"]
 
         if resultat_seq is not None:
             if resultat_seq["statut"] != "ok":
@@ -989,34 +1156,51 @@ with onglet9:
         "calculées à partir de ces mesures (charge = RPE × durée, méthode sRPE de Foster). "
         "Utiliser des identifiants pseudonymisés (A01, A02…) et obtenir le consentement de chaque athlète."
     )
-    journal = charger_journal()
+    journal = journal_global   # chargé une seule fois, dans la barre latérale
+    if erreur_journal:
+        st.error(erreur_journal)
     col_a, col_b, col_c = st.columns(3)
     col_a.metric("Athlètes suivis", journal["athlete_id"].nunique() if len(journal) else 0)
     col_b.metric("Jours saisis", len(journal))
     col_c.metric("Blessures déclarées", int(journal["blessure"].fillna(0).sum()) if len(journal) else 0)
 
     st.markdown("#### 1. Saisir une journée")
+    st.caption("Une journée par athlète et par date : enregistrer la même date une 2e fois REMPLACE la journée. "
+               "Pour ajouter une 2e séance le même jour, utilise l'onglet Charge & ACWR.")
+    _afficher_flash("journal")
     with st.form("form_journal", clear_on_submit=False):
         f1, f2, f3 = st.columns(3)
-        id_saisie = f1.text_input("Identifiant (ex. A01)", value="A01")
-        date_saisie = f2.date_input("Date", value=datetime.now().date())
+        id_saisie = f1.text_input("Identifiant (ex. A01)", value=st.session_state.get("athlete_reel") or "A01")
+        date_saisie = f2.date_input("Date", value=aujourdhui, max_value=aujourdhui, format="DD/MM/YYYY")
         rpe_saisie = f3.slider("Effort perçu de la séance (0 = repos)", 0, 10, 5)
         g1, g2, g3 = st.columns(3)
         duree_saisie = g1.number_input("Durée séance (min)", 0, 300, 60)
         sommeil_saisie = g2.number_input("Sommeil (h)", 2.0, 14.0, 7.5, step=0.25)
         fc_saisie = g3.number_input("FC au réveil (bpm)", 30, 120, 60)
         h1, h2, h3 = st.columns(3)
-        poids_saisie = h1.number_input("Poids (kg, optionnel)", 30.0, 200.0, 70.0, step=0.1)
+        # value=None : un poids non renseigné reste vide au lieu d'enregistrer 70 kg par défaut.
+        poids_saisie = h1.number_input("Poids (kg, optionnel)", 30.0, 200.0, value=None, step=0.1,
+                                       placeholder="Non mesuré")
         douleur_saisie = h2.slider("Douleur / courbatures (0-10)", 0, 10, 0)
         blessure_saisie = h3.checkbox("Blessure survenue ce jour")
-        if st.form_submit_button("Enregistrer la journée"):
-            ajouter_entree({
-                "athlete_id": id_saisie.strip(), "date": date_saisie, "rpe": rpe_saisie,
+        journee_validee = st.form_submit_button("Enregistrer la journée")
+    if journee_validee:
+        try:
+            _, statut = ajouter_entree({
+                "athlete_id": id_saisie, "date": date_saisie, "rpe": rpe_saisie,
                 "duree_min": duree_saisie, "sommeil_h": sommeil_saisie, "fc_repos": fc_saisie,
                 "poids_kg": poids_saisie, "douleur": douleur_saisie, "blessure": int(blessure_saisie),
             })
-            st.success("Journée enregistrée.")
+            id_enregistre = id_saisie.strip().upper()
+            st.session_state["athlete_reel"] = id_enregistre   # l'affichage ci-dessous suit l'athlète saisi
+            if statut == "remplacee":
+                _flash("journal", f"Journée du {date_saisie:%d/%m/%Y} de {id_enregistre} remplacée "
+                                  "(elle existait déjà).", "warning")
+            else:
+                _flash("journal", f"Journée du {date_saisie:%d/%m/%Y} enregistrée pour {id_enregistre}.")
             st.rerun()
+        except ErreurJournal as err:
+            st.error(str(err))
 
     st.markdown("#### 2. Importer / exporter")
     i1, i2 = st.columns(2)
@@ -1025,7 +1209,7 @@ with onglet9:
         if fichier is not None and st.button("Fusionner ce fichier"):
             try:
                 _, rap_import = importer_csv(fichier)
-            except ValueError as err:
+            except (ValueError, ErreurJournal) as err:
                 rap_import = {"statut": "illisible", "message": str(err)}
             # Le message est gardé en session : st.rerun() effacerait sinon tout affichage immédiat.
             st.session_state["rapport_import_journal"] = rap_import
@@ -1058,7 +1242,9 @@ with onglet9:
         st.info("Aucune donnée réelle pour l'instant. Saisis ta première journée ci-dessus, ou importe un CSV.")
     else:
         st.markdown("#### 3. Risque calculé sur données réelles")
-        choix_athlete = st.selectbox("Athlète", sorted(journal["athlete_id"].unique()))
+        if st.session_state.get("athlete_reel") not in ids_journal:
+            st.session_state.pop("athlete_reel", None)
+        choix_athlete = st.selectbox("Athlète", ids_journal, key="athlete_reel")
         profil_reel = {}
         p1, p2, p3 = st.columns(3)
         age_reel = p1.number_input("Âge (optionnel)", 0, 60, 0)
@@ -1071,8 +1257,18 @@ with onglet9:
         if res is None:
             st.warning("Pas de données pour cet athlète.")
         elif res["statut"] != "ok":
-            st.warning(f"Historique insuffisant : {res['jours']} jour(s) saisi(s), {res['jours_requis']} requis "
-                       "pour calculer des features fiables.")
+            st.warning(f"Historique insuffisant pour le modèle : {res['jours']} jour(s) d'historique, "
+                       f"{res['jours_requis']} requis pour calculer des features fiables.")
+            # En attendant, la charge et l'ACWR provisoire sont déjà visibles.
+            charge_provisoire = charge_28j(journal, choix_athlete)
+            acwr_provisoire = calculer_acwr(charge_provisoire)
+            st.metric("ACWR provisoire", acwr_provisoire["acwr"],
+                      help=f"Calculé sur {acwr_provisoire['jours_historique']} jour(s) au lieu de 28.")
+            fig_prov = px.bar(charge_provisoire, x="date", y="charge", template=MODELE_PLOTLY,
+                              title="Charge d'entraînement quotidienne (données réelles)")
+            fig_prov.update_traces(marker_color="#1B6E8C")
+            fig_prov.update_layout(height=300, margin=dict(l=20, r=20, t=30, b=20))
+            tracer(fig_prov)
         else:
             pr = res["profil"]
             r1, r2, r3 = st.columns(3)
@@ -1255,8 +1451,13 @@ with onglet11:
                 }
             except (ValueError, FileNotFoundError) as err:
                 st.session_state["resultat_test_csv"] = {"nom": nom_test, "erreur": str(err)}
+            except Exception as err:  # noqa: BLE001 - devant le jury : un message lisible, jamais une trace Python
+                st.session_state["resultat_test_csv"] = {
+                    "nom": nom_test, "erreur": f"Analyse impossible ({type(err).__name__} : {str(err)[:300]}). "
+                                              "Vérifier le format du fichier, ou lancer `python -m models.testeur_csv "
+                                              "--test fichier.csv` pour le détail."}
             finally:
-                chemin_test.unlink(missing_ok=True)
+                shutil.rmtree(dossier_tmp, ignore_errors=True)
 
     r_test = st.session_state.get("resultat_test_csv")
     if r_test:
