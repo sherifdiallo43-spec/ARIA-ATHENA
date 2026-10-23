@@ -33,7 +33,7 @@ st.set_page_config(
     page_title="ATHÉNA | ARiA Tech - PARC 2026",
     page_icon="🧬",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="auto",   # fermée sur téléphone (QR code du poster), ouverte sur ordinateur
 )
 injecter_theme()
 
