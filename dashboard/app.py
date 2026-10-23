@@ -12,38 +12,17 @@ from pathlib import Path
 from collections import deque
 from datetime import datetime
 
-import numpy as np
-import pandas as pd
-import plotly.graph_objects as go
-import plotly.express as px
 import streamlit as st
 
 # Rend le package "athena" importable quel que soit le répertoire de lancement
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from data.simulators import (
-    generer_signal_ecg, simuler_constantes_vitales, generer_historique_charge,
-    generer_micronutriments_simules, generer_snapshot_equipe, EQUIPE_NATIONALE_DEMO,
-)
-from analytics.metrics import (
-    calculer_acwr, calculer_bmr_tdee, moteur_de_decision, calculer_performance_score,
-)
-from analytics.ai_coach import generer_recommandations_coach
-from models.injury_risk import construire_vecteur_features, predire_profil_risque, predire_tendance_risque
-from models.experiment_comparaison import charger_ou_executer_experience
-from models.explicabilite import expliquer_prediction, recommander_leviers, simuler_scenario
-from reports.pdf_report import generer_rapport_pdf
-from data.donnees_reelles import (
-    COLONNES as COLONNES_JOURNAL, DESCRIPTION_COLONNES, charger_journal, ajouter_entree,
-    importer_csv, gabarit_csv, risque_actuel, evaluer_sur_donnees_reelles, DOSSIER_REEL,
-    ErreurJournal, ajouter_seance, charge_28j, moyennes_7j, charger_repas, ajouter_repas, supprimer_repas,
-    COLONNES_REPAS,
-)
-from dashboard.theme import (
+from dashboard.theme import (  # noqa: E402 - léger : le thème s'affiche avant les imports lourds
     PALETTE, MODELE_PLOTLY, injecter_theme, marque_barre_laterale, en_tete,
     carte_kpi, carte_alerte, pied_de_page,
 )
+from dashboard.ecran_demarrage import EcranDemarrage  # noqa: E402
 
 
 # CONFIGURATION GÉNÉRALE
@@ -53,6 +32,57 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+injecter_theme()
+
+# ÉCRAN DE DÉMARRAGE : seulement au tout premier chargement, quand les modules lourds ne sont pas
+# encore en mémoire (~5 à 8 s). Ensuite tout est déjà chargé : aucune attente artificielle.
+demarrage = EcranDemarrage() if "models.injury_risk" not in sys.modules else None
+
+
+def _etape_faite():
+    if demarrage:
+        demarrage.valider()
+
+
+import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
+import plotly.graph_objects as go  # noqa: E402
+import plotly.express as px  # noqa: E402
+_etape_faite()   # Moteur de calcul
+
+from models.injury_risk import (  # noqa: E402
+    construire_vecteur_features, predire_profil_risque, predire_tendance_risque, _charger_modeles,
+)
+from models.experiment_comparaison import charger_ou_executer_experience  # noqa: E402
+from models.explicabilite import expliquer_prediction, recommander_leviers, simuler_scenario  # noqa: E402
+_charger_modeles()
+_etape_faite()   # Modèle de risque de blessure
+
+from data.simulators import (  # noqa: E402
+    generer_signal_ecg, simuler_constantes_vitales, generer_historique_charge,
+    generer_micronutriments_simules, generer_snapshot_equipe, EQUIPE_NATIONALE_DEMO,
+)
+from analytics.metrics import (  # noqa: E402
+    calculer_acwr, calculer_bmr_tdee, moteur_de_decision, calculer_performance_score,
+)
+from analytics.ai_coach import generer_recommandations_coach  # noqa: E402
+from reports.pdf_report import generer_rapport_pdf  # noqa: E402
+from data.donnees_reelles import (  # noqa: E402
+    COLONNES as COLONNES_JOURNAL, DESCRIPTION_COLONNES, charger_journal, ajouter_entree,
+    importer_csv, gabarit_csv, risque_actuel, evaluer_sur_donnees_reelles, DOSSIER_REEL,
+    ErreurJournal, ajouter_seance, charge_28j, moyennes_7j, charger_repas, ajouter_repas, supprimer_repas,
+    COLONNES_REPAS,
+)
+_etape_faite()   # Coach IA, moteur de décision et rapports
+
+try:
+    # Préchauffage du détecteur de pose (~2 s) : la 1re analyse vidéo devant le jury est immédiate.
+    from computer_vision.pose_analysis import modele_disponible_localement as _pose_locale, _charger_detecteur
+    if _pose_locale():
+        _charger_detecteur()
+except Exception:  # noqa: BLE001 - l'onglet Analyse Vidéo affichera l'erreur détaillée
+    pass
+_etape_faite()   # Détecteur de posture
 
 
 def _pleine_largeur(fn, *args, **kwargs):
@@ -117,8 +147,6 @@ def experiences_e2_e3_en_cache() -> tuple:
         resultats.append(json.loads(chemin.read_text(encoding="utf-8")) if chemin.exists() else None)
     return tuple(resultats)
 
-
-injecter_theme()
 
 
 # ÉTAT DE SESSION
@@ -276,6 +304,7 @@ performance = calculer_performance_score(
 )
 
 alertes = moteur_de_decision(vitals_courants, acwr_info, bilan_calorique, df_micro)
+_etape_faite()   # Profil de l'athlète, risque et alertes
 
 
 # EN-TÊTE (après les calculs : il affiche le statut de l'athlète)
@@ -1523,3 +1552,7 @@ with onglet11:
 
 # PIED DE PAGE
 pied_de_page()
+
+# Tout est affiché : l'écran de démarrage s'efface en fondu.
+if demarrage:
+    demarrage.terminer()
