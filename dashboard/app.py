@@ -24,6 +24,9 @@ from dashboard.theme import (  # noqa: E402 - léger : le thème s'affiche avant
 )
 from dashboard.ecran_demarrage import EcranDemarrage  # noqa: E402
 
+# Version publique sur Streamlit Community Cloud (l'application y est installée sous /mount/src).
+EN_LIGNE = str(Path(__file__).resolve()).startswith("/mount/src")
+
 
 # CONFIGURATION GÉNÉRALE
 st.set_page_config(
@@ -78,7 +81,7 @@ _etape_faite()   # Coach IA, moteur de décision et rapports
 try:
     # Préchauffage du détecteur de pose (~2 s) : la 1re analyse vidéo devant le jury est immédiate.
     from computer_vision.pose_analysis import modele_disponible_localement as _pose_locale, _charger_detecteur
-    if _pose_locale():
+    if _pose_locale() or EN_LIGNE:   # en ligne : le modèle (9 Mo, absent de git) est téléchargé ici
         _charger_detecteur()
 except Exception:  # noqa: BLE001 - l'onglet Analyse Vidéo affichera l'erreur détaillée
     pass
@@ -310,6 +313,11 @@ _etape_faite()   # Profil de l'athlète, risque et alertes
 # EN-TÊTE (après les calculs : il affiche le statut de l'athlète)
 en_tete(nom_athlete, profil_risque, acwr_info, mode_simulation,
         source=f"Données réelles : {id_reel}" if id_reel else "Simulation")
+
+# Version publique : le disque est partagé par tous les visiteurs et effacé à chaque redémarrage.
+if EN_LIGNE:
+    st.info("Version de démonstration en ligne : les données saisies sont visibles par tous les visiteurs et "
+            "effacées au redémarrage. Ne saisissez aucune donnée réelle d'athlète.")
 
 
 # ONGLETS PRINCIPAUX
