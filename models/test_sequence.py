@@ -133,6 +133,16 @@ def main():
     autour_cheville = img[370:390, 210:230].max()        # cheville droite cachée (0,55 ; 0,95)
     verif("point peu visible non dessiné", autour_cheville == 0)
 
+    # Squat : jambe tendue (personne debout) = pas de jugement, alors que la course juge le même genou
+    from computer_vision.pose_analysis import COULEUR_OK, COULEUR_LIMITE, COULEUR_HORS
+    def couleurs_jugement(mouvement):
+        img = dessiner_squelette(np.zeros((400, 400, 3), dtype=np.uint8), pose, mouvement)
+        return sum(int((img == np.array(c, dtype=np.uint8)).all(axis=2).sum())
+                   for c in (COULEUR_OK, COULEUR_LIMITE, COULEUR_HORS))
+    debout_squat, debout_course = couleurs_jugement("Squat"), couleurs_jugement("Course à pied")
+    verif("squat debout : tracé neutre (non jugé)", debout_squat == 0 and debout_course > 0,
+          f"({debout_squat} px jugés en squat, {debout_course} px en course)")
+
     print("\nTous les tests passent." if ok else "\nDes tests ont échoué.")
     sys.exit(0 if ok else 1)
 

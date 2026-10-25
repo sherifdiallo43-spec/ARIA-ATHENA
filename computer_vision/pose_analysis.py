@@ -284,6 +284,12 @@ COULEUR_LIMITE = (34, 160, 240)    # orange : à moins de 15° de la plage
 COULEUR_HORS = (61, 40, 192)       # rouge : franchement hors plage
 SEGMENTS_JAMBE = {"G": ((23, 25), (25, 27)), "D": ((24, 26), (26, 28))}   # cuisse, tibia
 SEGMENT_TRONC = {"G": (11, 23), "D": (12, 24)}
+# Squat et réception sont notés au bas du mouvement : jambe encore tendue (genou au-delà de la plage
+# + cette marge), l'image n'est pas jugée, sinon une personne debout s'afficherait en rouge.
+MOUVEMENTS_EN_FLEXION = ("Squat", "Réception de saut")
+MARGE_PHASE_JUGEE = 20
+# Deux genoux plus proches que cette fraction de l'image (vue de profil) : une seule série d'étiquettes.
+DISTANCE_ETIQUETTES = 0.08
 
 
 def _couleur_jugement(angle: float, plage: tuple) -> tuple:
@@ -311,7 +317,9 @@ def dessiner_squelette(image_bgr: np.ndarray, landmarks, mouvement: str | None =
       pas ce que le modèle devine ;
     - si `mouvement` est donné : angles du genou et de la hanche écrits à côté des articulations,
       cuisse/tibia/tronc colorés selon la plage de référence (bleu = dans la plage, orange =
-      proche, rouge = hors plage)."""
+      proche, rouge = hors plage). Squat et réception : jambe tendue = pas de jugement (tracé
+      neutre), comme le score qui n'est calculé qu'au bas du mouvement ;
+    - vue de profil (genoux superposés) : étiquettes du côté le plus visible seulement."""
     image_annotee = image_bgr.copy()
     h, w = image_bgr.shape[:2]
     trait = max(2, int(round(min(h, w) / 200)))
@@ -327,18 +335,31 @@ def dessiner_squelette(image_bgr: np.ndarray, landmarks, mouvement: str | None =
     if reference:
         def pt(idx):
             return (landmarks[idx].x * w, landmarks[idx].y * h, getattr(landmarks[idx], "visibility", 1.0))
+        par_cote = {}
         for cote in ("G", "D"):
             m = _mesures_cote(pt, cote)
             if m["visibilite"] < VISIBILITE_TRACE:
                 continue
-            c_genou = _couleur_jugement(m["angle_genou"], reference["genou"])
-            c_hanche = _couleur_jugement(m["angle_hanche"], reference["hanche"])
+            jambe_tendue = (mouvement in MOUVEMENTS_EN_FLEXION
+                            and m["angle_genou"] > reference["genou"][1] + MARGE_PHASE_JUGEE)
+            if jambe_tendue:
+                c_genou = c_hanche = COULEUR_NEUTRE
+            else:
+                c_genou = _couleur_jugement(m["angle_genou"], reference["genou"])
+                c_hanche = _couleur_jugement(m["angle_hanche"], reference["hanche"])
             cuisse, tibia = SEGMENTS_JAMBE[cote]
             couleurs[cuisse], couleurs[tibia] = c_genou, c_genou
             couleurs[SEGMENT_TRONC[cote]] = c_hanche
             genou, hanche = cuisse[1], cuisse[0]
-            etiquettes.append((f"genou {m['angle_genou']:.0f}", points[genou], c_genou))
-            etiquettes.append((f"hanche {m['angle_hanche']:.0f}", points[hanche], c_hanche))
+            par_cote[cote] = (m["visibilite"], [(f"genou {m['angle_genou']:.0f}", points[genou], c_genou),
+                                                (f"hanche {m['angle_hanche']:.0f}", points[hanche], c_hanche)])
+        if len(par_cote) == 2:
+            (xg, yg), (xd, yd) = points[SEGMENTS_JAMBE["G"][0][1]], points[SEGMENTS_JAMBE["D"][0][1]]
+            if np.hypot(xg - xd, yg - yd) < DISTANCE_ETIQUETTES * min(h, w):
+                plus_visible = max(par_cote, key=lambda c: par_cote[c][0])
+                par_cote = {plus_visible: par_cote[plus_visible]}
+        for _, etiq in par_cote.values():
+            etiquettes.extend(etiq)
 
     for i, j in CONNEXIONS_SQUELETTE:
         if visible[i] and visible[j]:
@@ -351,7 +372,8 @@ def dessiner_squelette(image_bgr: np.ndarray, landmarks, mouvement: str | None =
                 cv2.circle(image_annotee, points[k], rayon, (20, 20, 20), -1, cv2.LINE_AA)
                 cv2.circle(image_annotee, points[k], max(1, rayon - 1), (255, 255, 255), -1, cv2.LINE_AA)
     # Variantes claires des 3 couleurs pour le texte, lisibles sur le pavé sombre.
-    texte_clair = {COULEUR_OK: (240, 200, 120), COULEUR_LIMITE: (80, 190, 255), COULEUR_HORS: (120, 120, 255)}
+    texte_clair = {COULEUR_OK: (240, 200, 120), COULEUR_LIMITE: (80, 190, 255), COULEUR_HORS: (120, 120, 255),
+                   COULEUR_NEUTRE: COULEUR_NEUTRE}
     for texte, (x, y), couleur in etiquettes:
         _texte(image_annotee, texte, (x + 2 * rayon, y), echelle_texte, texte_clair[couleur])
     return image_annotee
