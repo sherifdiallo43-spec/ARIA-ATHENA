@@ -73,7 +73,8 @@ def generer_rapport_pdf(chemin_sortie: str, athlete: dict, profil_risque: dict,
 
     data_resume = [
         ["Indicateur", "Valeur", "Statut"],
-        ["Injury Risk Score", f"{profil_risque['injury_risk_pct']} %", niveau_risque],
+        ["Score de risque", f"{profil_risque['injury_risk_pct']} / 100", niveau_risque],
+        ["Probabilité estimée de blessure", f"{profil_risque['probabilite_prevalence_pct']} %", ""],
         ["Fatigue Level", f"{profil_risque['fatigue_score']} / 10", profil_risque["fatigue_categorie"]["niveau"]],
         ["Overtraining Risk", f"{profil_risque['overtraining_pct']} %", profil_risque["overtraining_categorie"]["niveau"]],
         ["ACWR (charge)", f"{acwr_info['acwr']}", acwr_info["zone"]],
@@ -140,7 +141,7 @@ def generer_rapport_pdf(chemin_sortie: str, athlete: dict, profil_risque: dict,
             elements.append(Spacer(1, 3))
         pc = plan_action["plan_combine"]
         elements.append(Paragraph(
-            f"<b>Plan combiné :</b> risque {pc['avant_pct']} % -&gt; {pc['apres_pct']} % (-{pc['gain_pts']} pts).",
+            f"<b>Plan combiné :</b> score de risque {pc['avant_pct']} -&gt; {pc['apres_pct']} / 100 (-{pc['gain_pts']} pts).",
             styles["AthenaCorps"]))
         elements.append(Spacer(1, 12))
 

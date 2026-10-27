@@ -163,11 +163,11 @@ def entrainer_et_sauvegarder(recherche_hyperparametres: bool = True):
     # structure interne de l'objet modèle sauvegardé.
     feature_importances = [round(float(v), 4) for v in clf.feature_importances_]
 
-    # Calibration isotonique des probabilités : compute_sample_weight("balanced")
-    # corrige le déséquilibre de classes pour l'entraînement mais déforme les
-    # probabilités brutes du Gradient Boosting (elles ne reflètent plus la vraie
-    # fréquence de blessure). On recalibre sur les données de validation pour que
-    # l'Injury Risk (%) affiché soit une probabilité fiable, pas juste un score relatif.
+    # Calibration isotonique, faite AVEC la pondération équilibrée : la sortie est donc
+    # calibrée pour une population à 50 % de blessés. C'est le « score de risque » (/100)
+    # du dashboard, volontairement sensible pour la détection. La probabilité réelle
+    # (prévalence ≈ 20 %) s'obtient par correction de Bayes : voir
+    # injury_risk.corriger_prevalence, affichée à côté du score.
     clf_calibre = CalibratedClassifierCV(estimator=clf, method="isotonic", cv=5)
     clf_calibre.fit(X_train, yb_train, sample_weight=poids_train)
 

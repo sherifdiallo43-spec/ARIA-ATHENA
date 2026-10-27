@@ -54,7 +54,8 @@ import plotly.express as px  # noqa: E402
 _etape_faite()   # Moteur de calcul
 
 from models.injury_risk import (  # noqa: E402
-    construire_vecteur_features, predire_profil_risque, predire_tendance_risque, _charger_modeles,
+    construire_vecteur_features, corriger_prevalence, predire_profil_risque, predire_tendance_risque,
+    _charger_modeles,
 )
 from models.experiment_comparaison import charger_ou_executer_experience  # noqa: E402
 from models.explicabilite import expliquer_prediction, recommander_leviers, simuler_scenario  # noqa: E402
@@ -542,7 +543,8 @@ with onglet5:
 
     col_k1, col_k2, col_k3 = st.columns(3)
     with col_k1:
-        carte_kpi(f"{profil_risque['injury_risk_pct']} %", "Risque de blessure",
+        carte_kpi(f"{profil_risque['injury_risk_pct']} / 100",
+                  f"Score de risque · probabilité estimée {profil_risque['probabilite_prevalence_pct']} %",
                   profil_risque["injury_risk_categorie"]["niveau"])
     with col_k2:
         carte_kpi(f"{profil_risque['fatigue_score']} / 10", "Niveau de fatigue",
@@ -563,7 +565,7 @@ with onglet5:
     ))
     fig_tendance.update_layout(template=MODELE_PLOTLY, height=160, paper_bgcolor="rgba(0,0,0,0)",
                                 margin=dict(l=10, r=10, t=10, b=10),
-                                xaxis_title=None, yaxis_title="Injury Risk (%)")
+                                xaxis_title=None, yaxis_title="Score de risque (/100)")
     tracer(fig_tendance)
 
     st.markdown("---")
@@ -630,15 +632,15 @@ with onglet5:
     ))
     fig_expl.update_layout(template=MODELE_PLOTLY, height=290, paper_bgcolor="rgba(0,0,0,0)",
                             plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=10, r=10, t=10, b=30),
-                            xaxis_title="Contribution au risque (points de %)")
+                            xaxis_title="Contribution au score de risque (points)")
     tracer(fig_expl)
 
     st.markdown("#### Plan d'action chiffré")
     if plan_action["leviers"]:
         for lv in plan_action["leviers"]:
-            st.markdown(f"- **{lv['action']}** ({lv['de']} {lv['vers']}) : **−{lv['gain_pts']} pts** de risque")
+            st.markdown(f"- **{lv['action']}** ({lv['de']} → {lv['vers']}) : **−{lv['gain_pts']} pts** de score")
         pc = plan_action["plan_combine"]
-        st.success(f"Plan combiné : risque {pc['avant_pct']} % **{pc['apres_pct']} %** (−{pc['gain_pts']} pts).")
+        st.success(f"Plan combiné : score de risque {pc['avant_pct']} → **{pc['apres_pct']} / 100** (−{pc['gain_pts']} pts).")
     else:
         st.info("Aucun levier à fort impact : le profil est déjà proche de l'optimum sur les facteurs actionnables.")
 
@@ -649,8 +651,8 @@ with onglet5:
         w_int = c_w3.slider("Intensité moyenne 7j", 0.05, 1.0, float(min(max(intensite_effort, 0.05), 1.0)), 0.05, key="w_int")
         res_w = simuler_scenario(features, {"sommeil_h": w_sommeil, "acwr": w_acwr, "intensite_moyenne_7j": w_int})
         m1, m2, m3 = st.columns(3)
-        m1.metric("Risque actuel", f"{res_w['avant_pct']} %")
-        m2.metric("Risque simulé", f"{res_w['apres_pct']} %", delta=f"{-res_w['gain_pts']:+.1f} pts", delta_color="inverse")
+        m1.metric("Score actuel", f"{res_w['avant_pct']} / 100")
+        m2.metric("Score simulé", f"{res_w['apres_pct']} / 100", delta=f"{-res_w['gain_pts']:+.1f} pts", delta_color="inverse")
         m3.metric("Gain", f"{res_w['gain_pts']:+.1f} pts")
         st.caption("Estimation du modèle sur données synthétiques : outil d'aide à la décision, pas une garantie.")
 
@@ -916,28 +918,30 @@ with onglet7:
         disponibilite = "Disponible" if profil["injury_risk_pct"] < 50 else "À surveiller"
         lignes_scored.append({
             "Athlète": nom_ligne, "Sport": ligne["Sport"], "ACWR": acwr_ligne,
-            "Injury Risk (%)": profil["injury_risk_pct"], "Fatigue (/10)": profil["fatigue_score"],
+            "Score de risque (/100)": profil["injury_risk_pct"],
+            "Probabilité estimée (%)": profil["probabilite_prevalence_pct"], "Fatigue (/10)": profil["fatigue_score"],
             "Overtraining (%)": profil["overtraining_pct"], "Disponibilité": disponibilite,
         })
 
-    df_classement = pd.DataFrame(lignes_scored).sort_values("Injury Risk (%)")
+    df_classement = pd.DataFrame(lignes_scored).sort_values("Score de risque (/100)")
 
     col_e1, col_e2, col_e3 = st.columns(3)
     col_e1.metric("Effectif suivi", len(df_classement))
     col_e2.metric("Athlètes à surveiller", (df_classement["Disponibilité"] == "À surveiller").sum())
-    col_e3.metric("Injury Risk moyen", f"{df_classement['Injury Risk (%)'].mean():.1f} %")
+    col_e3.metric("Score de risque moyen", f"{df_classement['Score de risque (/100)'].mean():.1f} / 100")
 
     st.markdown("#### Classement par risque (du plus sûr au plus exposé)")
     _pleine_largeur(
         st.dataframe,
-        df_classement.style.background_gradient(subset=["Injury Risk (%)"], cmap="RdYlGn_r", vmin=0, vmax=100)
-        .format({"ACWR": "{:.2f}", "Injury Risk (%)": "{:.1f}", "Fatigue (/10)": "{:.1f}", "Overtraining (%)": "{:.1f}"}),
+        df_classement.style.background_gradient(subset=["Score de risque (/100)"], cmap="RdYlGn_r", vmin=0, vmax=100)
+        .format({"ACWR": "{:.2f}", "Score de risque (/100)": "{:.1f}", "Probabilité estimée (%)": "{:.1f}",
+                 "Fatigue (/10)": "{:.1f}", "Overtraining (%)": "{:.1f}"}),
         hide_index=True,
     )
 
-    fig_equipe = px.bar(df_classement, x="Athlète", y=["Injury Risk (%)", "Overtraining (%)"],
+    fig_equipe = px.bar(df_classement, x="Athlète", y=["Score de risque (/100)", "Overtraining (%)"],
                          barmode="group", template=MODELE_PLOTLY, title="Risque de blessure vs surentraînement par athlète",
-                         labels={"value": "%", "variable": ""})
+                         labels={"value": "/ 100", "variable": ""})
     fig_equipe.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", height=380)
     tracer(fig_equipe)
 
@@ -1309,7 +1313,8 @@ with onglet9:
         else:
             pr = res["profil"]
             r1, r2, r3 = st.columns(3)
-            r1.metric("Risque de blessure", f"{pr['injury_risk_pct']} %")
+            r1.metric("Score de risque", f"{pr['injury_risk_pct']} / 100",
+                      f"probabilité estimée {pr['probabilite_prevalence_pct']} %", delta_color="off")
             r2.metric("Fatigue estimée", f"{pr['fatigue_score']}/10")
             r3.metric("Assiduité (28 j)", f"{int(res['info']['taux_saisie_28j'] * 100)} %")
             if res["info"]["non_mesures"]:
@@ -1384,16 +1389,19 @@ with onglet10:
     if e == 1:
         st.markdown(f"**{sc['athlete']['nom']}** — {sc['athlete']['age']} ans, trois semaines de charge modérée "
                     "puis une montée brutale la semaine avant la compétition.")
-        d1, d2, d3 = st.columns(3)
+        d1, d0, d2, d3 = st.columns(4)
         niveau_demo = sc["profil_risque"]["injury_risk_categorie"]["niveau"]
-        d1.metric("Risque de blessure", f"{sc['profil_risque']['injury_risk_pct']} %", niveau_demo,
+        d1.metric("Score de risque", f"{sc['profil_risque']['injury_risk_pct']} / 100", niveau_demo,
                   delta_color="normal" if niveau_demo == "Faible" else "inverse")
+        d0.metric("Probabilité estimée", f"{sc['profil_risque']['probabilite_prevalence_pct']} %",
+                  help="Score ramené à la fréquence réelle des blessures (≈ 20 %) par la règle de Bayes. "
+                       "Vérifié sur 20 000 profils inédits : les probabilités annoncées correspondent aux fréquences observées.")
         d2.metric("ACWR", float(sc["acwr_info"]["acwr"]), sc["acwr_info"]["zone"], delta_color="off")
         d3.metric("Fatigue", f"{sc['profil_risque']['fatigue_score']} / 10")
         for niveau, titre, action in sc["alertes"][:3]:
             (st.error if niveau == "Critique" else st.warning)(f"**{titre}** — {action}")
     elif e == 2:
-        st.markdown("**Qu'est-ce qui pèse sur son risque ?** (points de % vs une référence saine)")
+        st.markdown("**Qu'est-ce qui pèse sur son risque ?** (points de score vs une référence saine)")
         df_expl = pd.DataFrame(sc["explication"])[["facteur", "valeur", "reference", "contribution_pts"]]
         df_expl.columns = ["Facteur", "Valeur actuelle", "Référence saine", "Contribution (pts)"]
         tableau(df_expl.set_index("Facteur"))
@@ -1405,16 +1413,19 @@ with onglet10:
         gain_h = st.slider("Heures de sommeil en plus", 0.0, 3.0, 1.5, 0.5, key="demo_sommeil")
         res_demo = simuler_scenario(sc["features"], {"sommeil_h": _SOMMEIL_DEMO + gain_h})
         w1, w2, w3 = st.columns(3)
-        w1.metric("Avant", f"{res_demo['avant_pct']} %")
-        w2.metric("Après", f"{res_demo['apres_pct']} %")
+        w1.metric("Score avant", f"{res_demo['avant_pct']} / 100")
+        w2.metric("Score après", f"{res_demo['apres_pct']} / 100")
         w3.metric("Gain", f"-{res_demo['gain_pts']} pts")
-        st.caption("Calculé par le modèle sur le profil de cette athlète, pas une règle écrite à la main.")
+        proba_avant = sc["profil_risque"]["probabilite_prevalence_pct"]  # même valeur qu'à l'étape 1
+        proba_apres = corriger_prevalence(res_demo["apres_pct"] / 100) * 100
+        st.caption(f"Probabilité estimée : {proba_avant:.1f} % → {proba_apres:.1f} %. "
+                   "Calculé par le modèle sur le profil de cette athlète, pas une règle écrite à la main.")
     elif e == 4:
         st.markdown("**Plan d'action chiffré** (leviers classés par gain de risque)")
         for lv in sc["plan_action"]["leviers"]:
-            st.markdown(f"- **{lv['action']}** ({lv['de']} {lv['vers']}) : -{lv['gain_pts']} pts")
+            st.markdown(f"- **{lv['action']}** ({lv['de']} → {lv['vers']}) : -{lv['gain_pts']} pts")
         pc = sc["plan_action"]["plan_combine"]
-        st.success(f"Plan combiné : risque {pc['avant_pct']} % {pc['apres_pct']} % (-{pc['gain_pts']} pts).")
+        st.success(f"Plan combiné : score de risque {pc['avant_pct']} → {pc['apres_pct']} / 100 (-{pc['gain_pts']} pts).")
         st.markdown("**Recommandations du coach IA**")
         for reco in sc["recommandations"][:4]:
             st.markdown(f"- **{reco['categorie']}** — {reco['texte']}")

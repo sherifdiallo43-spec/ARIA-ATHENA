@@ -226,8 +226,8 @@ def en_tete(athlete: str, profil_risque: dict, acwr_info: dict, mode_simulation:
           <div class="entete-droite">
             <div class="entete-bloc"><div class="entete-bloc-label">Athlète</div>
               <div class="entete-bloc-valeur">{athlete}</div></div>
-            <div class="entete-bloc"><div class="entete-bloc-label">Risque de blessure</div>
-              <div class="entete-bloc-valeur">{profil_risque['injury_risk_pct']} %
+            <div class="entete-bloc"><div class="entete-bloc-label">Score de risque · probabilité estimée</div>
+              <div class="entete-bloc-valeur">{profil_risque['injury_risk_pct']} / 100 · {profil_risque['probabilite_prevalence_pct']} %
                 <span class="{classe_niveau(cat['niveau'])}" style="margin-left:6px;">{cat['niveau']}</span></div></div>
             <div class="entete-bloc"><div class="entete-bloc-label">ACWR</div>
               <div class="entete-bloc-valeur">{acwr_info['acwr']} · {acwr_info['zone']}</div></div>
