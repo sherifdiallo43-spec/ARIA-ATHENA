@@ -277,6 +277,20 @@ def test_fiche_athlete():
           "valeur absente signalée, PDF généré")
 
 
+def test_identifiants_et_fichier_sans_ligne():
+    d = _tmp()
+    (d / "ids.csv").write_text("id,acwr,sommeil_h,injured\n1,1.2,7,no\n,1.9,5,yes\n3,1.0,8,no\n", encoding="utf-8")
+    L = T.analyser(d / "ids.csv", n_boot=20)["_lisible"]
+    assert L["Athlète"].tolist() == ["1", "Ligne 2", "3"], L["Athlète"].tolist()
+    (d / "vide.csv").write_text("acwr,sommeil_h,blessure\n", encoding="utf-8")
+    try:
+        T.analyser(d / "vide.csv")
+        raise AssertionError("un fichier sans ligne aurait dû être refusé")
+    except ValueError as err:
+        assert "aucune ligne" in str(err), err
+    print("[OK] identifiants numériques lisibles (1 et non 1.0, vide -> Ligne n), fichier sans ligne refusé clairement")
+
+
 def test_zone_acwr_et_performance_sans_regularite():
     from analytics.metrics import calculer_performance_score, zone_acwr
     assert [zone_acwr(a)["zone"] for a in (0.7, 1.0, 1.4, 1.6)] == \

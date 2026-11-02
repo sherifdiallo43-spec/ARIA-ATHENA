@@ -439,6 +439,8 @@ def scores_etude(bundle: dict, Xte: np.ndarray) -> dict:
 
 def analyser(chemin_test, cible=None, fatigue=None, mapping=None, chemin_train=None, n_boot=1000) -> dict:
     df = lire_csv(chemin_test)
+    if len(df) == 0:
+        raise ValueError("Le fichier ne contient aucune ligne de données (seulement la ligne d'en-tête).")
     assoc = associer_colonnes(df, mapping)
     df, notes_imc = deriver_imc(df, assoc)
     exclues = set(assoc.pop("_utilisees"))
@@ -579,13 +581,23 @@ def _corrections(X: np.ndarray, Xn: np.ndarray) -> list:
     return sorties
 
 
+def _texte_cellule(v) -> str:
+    """Valeur d'une cellule en texte lisible : « 12 » et non « 12.0 », vide si la cellule est vide."""
+    if v is None or (isinstance(v, float) and not np.isfinite(v)):
+        return ""
+    if isinstance(v, (float, np.floating)) and float(v).is_integer():
+        return str(int(v))
+    return str(v).strip()
+
+
 def tableau_lisible(df, X, Xn, score, proba, fat, y=None, col_id=None, col_date=None) -> pd.DataFrame:
     """Une ligne par athlète, dans l'ordre du fichier, avec les réponses d'ATHÉNA en clair."""
     n = len(df)
     lot = analyser_lot(Xn)
-    out = pd.DataFrame({"Athlète": df[col_id].astype(str).to_numpy() if col_id else [f"Ligne {i + 1}" for i in range(n)]})
+    ids = [_texte_cellule(v) for v in df[col_id]] if col_id else [""] * n
+    out = pd.DataFrame({"Athlète": [v or f"Ligne {i + 1}" for i, v in enumerate(ids)]})
     if col_date:
-        out["Date"] = df[col_date].astype(str).to_numpy()
+        out["Date"] = [_texte_cellule(v) for v in df[col_date]]
     predit = score >= SEUIL_ALERTE
     out["Blessure prédite"] = np.where(predit, "Oui", "Non")
     out["Niveau de risque"] = [_categorie_risque(s * 100)["niveau"] for s in score]
