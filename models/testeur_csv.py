@@ -20,7 +20,9 @@
 #   python -m models.testeur_csv --train train.csv --test inedit.csv
 #   python -m models.testeur_csv --demo        # répétition générale : jeu inédit simulé, colonnes renommées
 #
-# Sorties (dossier --sortie, défaut sorties_test/) : predictions.csv, rapport.md, resume.json.
+# Sorties (dossier --sortie, défaut sorties_test/) : predictions.csv, rapport.md, resume.json et
+# resultats_par_athlete.csv (une ligne par athlète : blessure prédite, niveau, facteur principal, action
+# prioritaire, vérité et résultat si connus, variables utilisées ; format Excel français).
 
 import argparse
 import difflib
@@ -46,7 +48,14 @@ if __package__ in (None, ""):                       # lancement direct : python 
     __package__ = "models"
 
 from .train_injury_model import FEATURE_NAMES, VALEURS_TYPIQUES, _generer_dataset  # noqa: E402
-from .injury_risk import (_charger_modeles, corriger_prevalence, DOMAINE_ENTRAINEMENT, LABELS_LISIBLES)  # noqa: E402
+from .injury_risk import (_charger_modeles, _categorie_risque, corriger_prevalence, DOMAINE_ENTRAINEMENT,  # noqa: E402
+                          LABELS_LISIBLES)
+from .explicabilite import LEVIERS, analyser_lot  # noqa: E402
+from analytics.metrics import zone_acwr  # noqa: E402
+
+# Score brut à partir duquel un athlète est déclaré « blessure prédite » : le seuil des métriques
+# publiées dans le rapport (précision / rappel au seuil 0,5).
+SEUIL_ALERTE = 0.5
 
 # Synonymes (déjà normalisés : minuscules, sans accents, séparateurs -> « _ »).
 SYNONYMES = {
@@ -83,6 +92,11 @@ SYN_BILAN_CALORIQUE = {"ecart_calorique", "calorie_balance_pct", "calorie_balanc
 
 SYN_ETIQUETTE = ["blessure", "blesse", "injury", "injured", "injury_occurred", "label", "target", "y", "cible", "is_injured"]
 SYN_FATIGUE = ["fatigue", "fatigue_score", "fatigue_level", "niveau_fatigue", "score_fatigue"]
+SYN_ID = ["player_id", "athlete_id", "id_athlete", "id_joueur", "id", "athlete", "athlete_name", "player",
+          "player_name", "joueur", "joueuse", "nom", "name", "participant", "participant_id", "sujet", "subject"]
+SYN_DATE = ["date", "jour", "day", "date_seance", "session_date"]
+RESULTATS = {(1, 1): "Correct : blessure repérée", (0, 0): "Correct : pas de blessure",
+             (1, 0): "Fausse alerte", (0, 1): "Blessure manquée"}
 VRAI = {"1", "true", "vrai", "oui", "yes", "y", "o", "blesse", "injured", "injury", "positive", "pos"}
 FAUX = {"0", "false", "faux", "non", "no", "n", "sain", "healthy", "none", "negative", "neg", "aucune"}
 
@@ -361,7 +375,7 @@ def metriques_classification(y, score, proba_corr) -> dict:
         out["avertissement"] = "Une seule classe dans l'étiquette : AUC non définie."
         return out
     out.update(a)
-    pred = score >= 0.5
+    pred = score >= SEUIL_ALERTE
     tp = int(((pred == 1) & (y == 1)).sum())
     fp = int(((pred == 1) & (y == 0)).sum())
     fn = int(((pred == 0) & (y == 1)).sum())
@@ -461,12 +475,17 @@ def analyser(chemin_test, cible=None, fatigue=None, mapping=None, chemin_train=N
     if doublons:
         res["avertissements"].append(f"{doublons} lignes dupliquées dans le fichier (conservées).")
 
+    predit = score >= SEUIL_ALERTE
     sortie_df = df.copy()
     sortie_df["athena_score_risque"] = np.round(score, 4)
     sortie_df["athena_proba_corrigee"] = np.round(proba, 4)
     sortie_df["athena_fatigue"] = np.round(fat, 2)
+    sortie_df["athena_blessure_predite"] = np.where(predit, "Oui", "Non")
+    sortie_df["athena_niveau_risque"] = [_categorie_risque(s * 100)["niveau"] for s in score]
     res["_predictions"] = sortie_df
+    res["_X"] = X
 
+    y_complet = None
     if col_y:
         y, notes = lire_etiquette(df[col_y])
         res["avertissements"] += notes
@@ -477,6 +496,22 @@ def analyser(chemin_test, cible=None, fatigue=None, mapping=None, chemin_train=N
         res["production"] = metriques_classification(y[ok], score[ok], proba[ok])
         yy = y[ok]
         res["_y"] = yy
+        y_complet = y
+        sortie_df["blessure_reelle"] = np.where(ok, np.where(y == 1, "Oui", "Non"), "")
+        sortie_df["athena_resultat"] = _resultats(predit, y)
+
+    exclues_id = exclues | {c for c in (col_y, col_f) if c}
+    col_id = _trouver(df, None, SYN_ID, exclues_id)
+    col_date = _trouver(df, None, SYN_DATE, exclues_id | ({col_id} if col_id else set()))
+    lisible = tableau_lisible(df, X, Xn, score, proba, fat, y_complet, col_id, col_date)
+    res["_lisible"] = lisible
+    res["par_athlete"] = {
+        "n": int(len(df)), "seuil_score": SEUIL_ALERTE, "blessures_predites": int(predit.sum()),
+        "colonne_identifiant": col_id, "colonne_date": col_date,
+        "niveaux": {k: int((lisible["Niveau de risque"] == k).sum()) for k in ("Faible", "Modéré", "Élevé")},
+    }
+    if y_complet is not None:
+        res["par_athlete"]["resultats"] = {r: int((lisible["Résultat"] == r).sum()) for r in RESULTATS.values()}
     if col_f:
         res["colonne_fatigue"] = col_f
         res["fatigue"] = metriques_regression(_en_numerique(df[col_f]).to_numpy(), fat)
@@ -507,6 +542,74 @@ def analyser(chemin_test, cible=None, fatigue=None, mapping=None, chemin_train=N
     return res
 
 
+# ----------------------------------------------------------------------------------- par athlète ----
+
+def _resultats(predit: np.ndarray, y: np.ndarray) -> list:
+    return [RESULTATS[(int(p), int(v))] if np.isfinite(v) else "" for p, v in zip(predit, y)]
+
+
+def _facteurs_principaux(contributions: dict) -> list:
+    """Facteur qui augmente le plus le risque de chaque athlète (contribution positive la plus forte)."""
+    noms = list(contributions)
+    M = np.column_stack([contributions[n] for n in noms])
+    meilleur = M.argmax(axis=1)
+    return [f"{LABELS_LISIBLES[noms[k]]} (+{_f(M[i, k], 1)} pts)" if M[i, k] >= 0.5 else "Aucun facteur aggravant"
+            for i, k in enumerate(meilleur)]
+
+
+def _actions_prioritaires(gains: dict) -> list:
+    """Levier actionnable qui fait le plus baisser le risque de chaque athlète (mêmes leviers que le dashboard)."""
+    noms = list(gains)
+    M = np.column_stack([gains[n] for n in noms])
+    meilleur = M.argmax(axis=1)
+    return [f"{LEVIERS[noms[k]][1]} (-{_f(M[i, k], 1)} pts)" if M[i, k] > 0 else "Aucune action à fort impact"
+            for i, k in enumerate(meilleur)]
+
+
+def _corrections(X: np.ndarray, Xn: np.ndarray) -> list:
+    """Pour chaque ligne : variables absentes remplacées par leur valeur typique, ou bornées au domaine appris."""
+    sorties = []
+    for i in range(len(X)):
+        manq = [LABELS_LISIBLES[f] for j, f in enumerate(FEATURE_NAMES) if not np.isfinite(X[i, j])]
+        bornes = [LABELS_LISIBLES[f] for j, f in enumerate(FEATURE_NAMES)
+                  if np.isfinite(X[i, j]) and X[i, j] != Xn[i, j]]
+        morceaux = ([f"remplacées : {', '.join(manq)}"] if manq else []) + \
+                   ([f"bornées : {', '.join(bornes)}"] if bornes else [])
+        sorties.append(" ; ".join(morceaux))
+    return sorties
+
+
+def tableau_lisible(df, X, Xn, score, proba, fat, y=None, col_id=None, col_date=None) -> pd.DataFrame:
+    """Une ligne par athlète, dans l'ordre du fichier, avec les réponses d'ATHÉNA en clair."""
+    n = len(df)
+    lot = analyser_lot(Xn)
+    out = pd.DataFrame({"Athlète": df[col_id].astype(str).to_numpy() if col_id else [f"Ligne {i + 1}" for i in range(n)]})
+    if col_date:
+        out["Date"] = df[col_date].astype(str).to_numpy()
+    predit = score >= SEUIL_ALERTE
+    out["Blessure prédite"] = np.where(predit, "Oui", "Non")
+    out["Niveau de risque"] = [_categorie_risque(s * 100)["niveau"] for s in score]
+    out["Score de risque (/100)"] = np.round(score * 100, 1)
+    out["Probabilité estimée (%)"] = np.round(proba * 100, 1)
+    out["Fatigue prédite (/10)"] = np.round(fat, 1)
+    out["Zone ACWR"] = [zone_acwr(a)["zone"] for a in Xn[:, FEATURE_NAMES.index("acwr")]]
+    out["Facteur principal"] = _facteurs_principaux(lot["contributions"])
+    out["Action prioritaire"] = _actions_prioritaires(lot["gains_leviers"])
+    if y is not None:
+        ok = np.isfinite(y)
+        out["Blessure réelle"] = np.where(ok, np.where(y == 1, "Oui", "Non"), "")
+        out["Résultat"] = _resultats(predit, y)
+    for j, f in enumerate(FEATURE_NAMES):
+        out[LABELS_LISIBLES[f]] = np.round(Xn[:, j], 2)
+    out["Valeurs complétées"] = _corrections(X, Xn)
+    return out
+
+
+def csv_excel(df: pd.DataFrame) -> bytes:
+    """CSV qui s'ouvre d'un double-clic dans Excel en français : « ; », virgule décimale, accents (BOM)."""
+    return df.to_csv(index=False, sep=";", decimal=",").encode("utf-8-sig")
+
+
 # -------------------------------------------------------------------------------------------- rapport ----
 
 def _f(x, nd=3):
@@ -532,6 +635,19 @@ def rapport_md(res: dict) -> str:
         L.append(f"| {LABELS_LISIBLES[f]} | {s['manquantes']} | {s['sous_domaine']} | {s['sur_domaine']} |")
     for a in res["avertissements"]:
         L.append(f"\n⚠️ {a}")
+    pa = res.get("par_athlete")
+    if pa:
+        nv = pa["niveaux"]
+        L += ["", "## Réponses par athlète", "",
+              f"- Blessure prédite (score de risque à partir de {_f(pa['seuil_score'] * 100, 0)} / 100) : "
+              f"**{pa['blessures_predites']} athlète(s) sur {pa['n']}**",
+              f"- Niveau de risque : {nv['Élevé']} élevé · {nv['Modéré']} modéré · {nv['Faible']} faible"]
+        if "resultats" in pa:
+            r = pa["resultats"]
+            L.append(f"- Comparaison avec la vérité : {r['Correct : blessure repérée']} blessure(s) repérée(s) · "
+                     f"{r['Blessure manquée']} manquée(s) · {r['Fausse alerte']} fausse(s) alerte(s) · "
+                     f"{r['Correct : pas de blessure']} non-blessé(s) correctement laissé(s) de côté")
+        L.append("- Détail athlète par athlète : resultats_par_athlete.csv (s'ouvre dans Excel).")
     if "production" in res:
         p = res["production"]
         L += ["", f"## Risque de blessure — modèle de production (étiquette : « {res['colonne_etiquette']} »)", ""]
@@ -567,6 +683,8 @@ def ecrire_sorties(res: dict, dossier: Path) -> Path:
     dossier = Path(dossier) / datetime.now().strftime("%Y%m%d_%H%M%S")
     dossier.mkdir(parents=True, exist_ok=True)
     res["_predictions"].to_csv(dossier / "predictions.csv", index=False)
+    if "_lisible" in res:
+        (dossier / "resultats_par_athlete.csv").write_bytes(csv_excel(res["_lisible"]))
     resume = {k: v for k, v in res.items() if not k.startswith("_")}
     (dossier / "resume.json").write_text(json.dumps(resume, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     (dossier / "rapport.md").write_text(rapport_md(res), encoding="utf-8")

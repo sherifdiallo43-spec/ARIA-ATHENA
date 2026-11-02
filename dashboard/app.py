@@ -117,6 +117,20 @@ def image(img, **kw):
     return _pleine_largeur(st.image, img, **kw)
 
 
+def graphique_explication(explication: list, hauteur: int = 290):
+    """Barres « Pourquoi ce score ? » : contribution de chaque facteur, rouge s'il augmente le risque."""
+    fig = go.Figure(go.Bar(
+        x=[e["contribution_pts"] for e in explication][::-1],
+        y=[f"{e['facteur']} ({e['valeur']})" for e in explication][::-1],
+        orientation="h",
+        marker_color=[PALETTE["critique"] if e["contribution_pts"] > 0 else PALETTE["ok"] for e in explication][::-1],
+    ))
+    fig.update_layout(template=MODELE_PLOTLY, height=hauteur, paper_bgcolor="rgba(0,0,0,0)",
+                      plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=10, r=10, t=10, b=30),
+                      xaxis_title="Contribution au score de risque (points)")
+    return tracer(fig)
+
+
 def _flash(zone: str, message: str, genre: str = "success"):
     """Garde un message pour l'exécution suivante : st.rerun() efface sinon tout ce qui
     vient d'être affiché (d'où l'impression que « rien ne se passe » après un enregistrement)."""
@@ -624,16 +638,7 @@ with onglet5:
     st.markdown("#### Pourquoi ce score ? (explication individuelle)")
     st.caption("Pour CET athlète : de combien chaque facteur pousse son risque vers le haut (rouge) ou le bas (vert) "
                "par rapport à un profil de référence sain, recalculé avec le modèle de production.")
-    fig_expl = go.Figure(go.Bar(
-        x=[e["contribution_pts"] for e in explication_individuelle][::-1],
-        y=[f"{e['facteur']} ({e['valeur']})" for e in explication_individuelle][::-1],
-        orientation="h",
-        marker_color=[PALETTE["critique"] if e["contribution_pts"] > 0 else PALETTE["ok"] for e in explication_individuelle][::-1],
-    ))
-    fig_expl.update_layout(template=MODELE_PLOTLY, height=290, paper_bgcolor="rgba(0,0,0,0)",
-                            plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=10, r=10, t=10, b=30),
-                            xaxis_title="Contribution au score de risque (points)")
-    tracer(fig_expl)
+    graphique_explication(explication_individuelle)
 
     st.markdown("#### Plan d'action chiffré")
     if plan_action["leviers"]:
@@ -1453,11 +1458,115 @@ with onglet10:
 with onglet11:
     import io
     from models import testeur_csv as testeur
+    from analytics.fiche_athlete import construire_fiche, generer_pdf_fiche
+
+    def _afficher_fiche(fiche: dict):
+        """Fiche d'un athlète du CSV, dans l'ordre de la démo guidée : alerte, pourquoi, plan, coach, PDF."""
+        p = fiche["profil_risque"]
+        niveau_f = p["injury_risk_categorie"]["niveau"]
+        st.markdown(f"**{fiche['athlete']['nom']}** · blessure prédite : "
+                    f"**{'Oui' if fiche['blessure_predite'] else 'Non'}**")
+        f1, f2, f3, f4 = st.columns(4)
+        f1.metric("Score de risque", f"{p['injury_risk_pct']} / 100", niveau_f,
+                  delta_color="normal" if niveau_f == "Faible" else "inverse")
+        f2.metric("Probabilité estimée", f"{p['probabilite_prevalence_pct']} %",
+                  help="Score ramené à la fréquence réelle des blessures (≈ 20 %) par la règle de Bayes.")
+        f3.metric("ACWR", float(fiche["acwr_info"]["acwr"]), fiche["acwr_info"]["zone"], delta_color="off")
+        f4.metric("Fatigue", f"{p['fatigue_score']} / 10")
+        v = fiche["verite"]
+        if v:
+            (st.success if v["resultat"].startswith("Correct") else st.error)(
+                f"Vérité du fichier : blessure **{'Oui' if v['blessure_reelle'] else 'Non'}** → {v['resultat']}")
+        for niveau_a, titre, action in fiche["alertes"][:3]:
+            {"Critique": st.error, "Attention": st.warning}.get(niveau_a, st.info)(f"**{titre}** — {action}")
+
+        st.markdown("**Pourquoi ce score ?** (points de score vs une référence saine)")
+        graphique_explication(fiche["explication"], hauteur=260)
+
+        st.markdown("**Et si… ? Plan d'action chiffré**")
+        pc = fiche["plan_action"]["plan_combine"]
+        if fiche["plan_action"]["leviers"]:
+            for lv in fiche["plan_action"]["leviers"]:
+                st.markdown(f"- **{lv['action']}** ({lv['de']} → {lv['vers']}) : −{lv['gain_pts']} pts")
+            st.success(f"Plan combiné : score {pc['avant_pct']} → **{pc['apres_pct']} / 100** · probabilité "
+                       f"{pc['proba_avant_pct']} % → **{pc['proba_apres_pct']} %**.")
+        else:
+            st.info("Aucun levier à fort impact : le profil est déjà proche de l'optimum sur les facteurs actionnables.")
+
+        st.markdown("**Recommandations du coach IA**")
+        for reco in fiche["recommandations"][:4]:
+            st.markdown(f"- **{reco['categorie']}** — {reco['texte']}")
+
+        q = fiche["qualite"]
+        completees = [f"{testeur.LABELS_LISIBLES[c['champ']]} (valeur typique {c['valeur_imputee']:g})"
+                      for c in q["champs_imputes"]]
+        bornees = [f"{testeur.LABELS_LISIBLES[c['champ']]} ({c['valeur_recue']:g} → {c['valeur_utilisee']:g})"
+                   for c in q["champs_clippes"]]
+        if completees or bornees:
+            st.caption("Données complétées par ATHÉNA pour cet athlète : "
+                       + " ; ".join((["absentes : " + ", ".join(completees)] if completees else [])
+                                    + (["bornées au domaine appris : " + ", ".join(bornees)] if bornees else []))
+                       + ". Le résultat en dépend : à interpréter avec prudence.")
+
+    def _afficher_resultats_par_athlete(r_test: dict):
+        lis, pa = r_test["lisible"], r_test["res"]["par_athlete"]
+        st.markdown("---")
+        st.markdown("#### Réponses par athlète")
+        nv = pa["niveaux"]
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Blessure prédite", f"{pa['blessures_predites']} / {pa['n']}",
+                  help="Score de risque à partir de 50 / 100 : le seuil des métriques publiées dans le rapport.")
+        k2.metric("Risque élevé", nv["Élevé"])
+        k3.metric("Risque modéré", nv["Modéré"])
+        k4.metric("Risque faible", nv["Faible"])
+        if "resultats" in pa:
+            r = pa["resultats"]
+            st.caption(f"Comparaison avec la vérité du fichier : {r['Correct : blessure repérée']} blessure(s) repérée(s) · "
+                       f"{r['Blessure manquée']} manquée(s) · {r['Fausse alerte']} fausse(s) alerte(s) · "
+                       f"{r['Correct : pas de blessure']} non-blessé(s) correctement laissé(s) de côté.")
+
+        filtres = {"Tous": lis.index, "Blessure prédite": lis.index[lis["Blessure prédite"] == "Oui"]}
+        if "Résultat" in lis.columns:
+            filtres["Blessures manquées"] = lis.index[lis["Résultat"] == "Blessure manquée"]
+            filtres["Fausses alertes"] = lis.index[lis["Résultat"] == "Fausse alerte"]
+        choix = st.radio("Afficher", list(filtres), horizontal=True, key="filtre_csv")
+        vue = lis.loc[filtres[choix]].sort_values("Score de risque (/100)", ascending=False)
+        st.caption(f"{len(vue)} athlète(s), du plus au moins à risque"
+                   + (" (500 premiers à l'écran, tous dans le fichier Excel)." if len(vue) > 500 else "."))
+        _pleine_largeur(st.dataframe, vue.head(500), hide_index=True)
+
+        st.markdown("#### Fiche d'un athlète")
+        if vue.empty:
+            st.info("Aucun athlète dans cette sélection.")
+            return
+        a_date = "Date" in lis.columns
+        choisi = st.selectbox(
+            "Athlète (du plus au moins à risque, selon le filtre ci-dessus)", list(vue.index), key="athlete_csv",
+            format_func=lambda i: f"{lis.at[i, 'Athlète']}" + (f" · {lis.at[i, 'Date']}" if a_date else "")
+                                  + f" · {lis.at[i, 'Score de risque (/100)']} / 100")
+        reelle = lis.at[choisi, "Blessure réelle"] if "Blessure réelle" in lis.columns else ""
+        nom_fiche = f"{lis.at[choisi, 'Athlète']}" + (f" ({lis.at[choisi, 'Date']})" if a_date else "")
+        fiche = construire_fiche(r_test["X"][choisi], nom_fiche,
+                                 blessure_reelle=None if reelle == "" else reelle == "Oui")
+        _afficher_fiche(fiche)
+
+        cle_pdf = (r_test["nom"], int(choisi))
+        if st.button("Générer le rapport PDF de cet athlète", key="pdf_csv_bouton"):
+            try:
+                st.session_state["pdf_fiche_csv"] = (cle_pdf, generer_pdf_fiche(fiche))
+            except Exception as err:  # noqa: BLE001 - devant le jury : un message lisible
+                st.error(f"Échec de la génération du rapport. Détail : {err}")
+        pdf_garde = st.session_state.get("pdf_fiche_csv")
+        if pdf_garde and pdf_garde[0] == cle_pdf:
+            nom_fichier = "".join(ch if ch.isalnum() else "_" for ch in str(lis.at[choisi, "Athlète"]))[:40]
+            st.download_button("Télécharger le rapport PDF", pdf_garde[1], f"ATHENA_{nom_fichier}.pdf",
+                               "application/pdf", key="pdf_csv_telecharger")
 
     st.subheader("Tester le modèle sur un fichier CSV")
     st.caption("Même moteur que `python -m models.testeur_csv` : association automatique des colonnes "
                "(français ou anglais, séparateur , ou ;), nettoyage comme en production, verdict de "
-               "compatibilité, puis ROC-AUC avec IC95 si le fichier contient une colonne de blessure.")
+               "compatibilité, puis ROC-AUC avec IC95 si le fichier contient une colonne de blessure. "
+               "Ensuite, une réponse par athlète : blessure prédite, facteurs, plan d'action, rapport PDF.")
 
     fichier_test = st.file_uploader("Fichier CSV à tester", type=["csv", "txt"], key="csv_test")
     colonnes_test = []
@@ -1489,6 +1598,8 @@ with onglet11:
             try:
                 res_test = testeur.analyser(chemin_test, cible=cible_test)
                 predictions = res_test.pop("_predictions")
+                lisible = res_test.pop("_lisible")
+                X_brut = res_test.pop("_X")
                 res_test.pop("_y", None)
                 st.session_state["resultat_test_csv"] = {
                     "nom": nom_test, "res": res_test, "rapport": testeur.rapport_md(res_test),
@@ -1496,7 +1607,9 @@ with onglet11:
                     "apercu": predictions[[c for c in predictions.columns if str(c).startswith("athena_")]
                                           + [c for c in predictions.columns if not str(c).startswith("athena_")]].head(50),
                     "predictions": predictions.to_csv(index=False).encode("utf-8"),
+                    "lisible": lisible, "X": X_brut, "excel": testeur.csv_excel(lisible),
                 }
+                st.session_state.pop("pdf_fiche_csv", None)
             except (ValueError, FileNotFoundError) as err:
                 st.session_state["resultat_test_csv"] = {"nom": nom_test, "erreur": str(err)}
             except Exception as err:  # noqa: BLE001 - devant le jury : un message lisible, jamais une trace Python
@@ -1508,6 +1621,8 @@ with onglet11:
                 shutil.rmtree(dossier_tmp, ignore_errors=True)
 
     r_test = st.session_state.get("resultat_test_csv")
+    if r_test and "erreur" not in r_test and "lisible" not in r_test:
+        r_test = None   # résultat gardé par une version précédente de l'application : relancer le test
     if r_test:
         st.markdown(f"#### Résultat : {r_test['nom']}")
         if "erreur" in r_test:
@@ -1560,12 +1675,18 @@ with onglet11:
                         "Hors domaine (bornées)": q["sous_domaine"] + q["sur_domaine"],
                     })
                 _pleine_largeur(st.dataframe, pd.DataFrame(lignes_corr), hide_index=True)
-            st.markdown("**Aperçu des prédictions** (50 premières lignes)")
-            tableau(r_test["apercu"])
-            t1, t2, _ = st.columns([1, 1, 2])
-            t1.download_button("Télécharger les prédictions (CSV)", r_test["predictions"],
+            with st.expander("Prédictions brutes (format technique, 50 premières lignes)"):
+                tableau(r_test["apercu"])
+
+            _afficher_resultats_par_athlete(r_test)
+
+            t1, t2, t3 = st.columns(3)
+            t1.download_button("Résultats par athlète (Excel)", r_test["excel"],
+                               "athena_resultats_par_athlete.csv", "text/csv",
+                               help="Une ligne par athlète, s'ouvre directement dans Excel (séparateur « ; »).")
+            t2.download_button("Prédictions brutes (CSV)", r_test["predictions"],
                                "athena_predictions.csv", "text/csv")
-            t2.download_button("Télécharger le rapport (Markdown)", r_test["rapport"].encode("utf-8"),
+            t3.download_button("Rapport (Markdown)", r_test["rapport"].encode("utf-8"),
                                "athena_rapport_test.md", "text/markdown")
 
 

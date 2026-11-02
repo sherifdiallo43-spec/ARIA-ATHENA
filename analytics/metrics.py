@@ -39,20 +39,21 @@ def calculer_acwr(df_charge: pd.DataFrame) -> dict:
         aigue = float(serie.tail(7).mean())
         chronique = float(serie.mean())
     acwr = aigue / chronique if chronique > 0 else 0
-
-    if acwr < 0.8:
-        zone, couleur = "Sous-charge", "#5B9BB0"
-    elif acwr <= 1.3:
-        zone, couleur = "Zone optimale", "#1F7A52"
-    elif acwr <= 1.5:
-        zone, couleur = "Prudence", "#B26B00"
-    else:
-        zone, couleur = "Risque élevé", "#C0283D"
-
     return {
         "acwr": round(acwr, 2), "aigue": round(aigue, 1), "chronique": round(chronique, 1),
-        "zone": zone, "couleur": couleur, "jours_historique": int(len(serie)),
+        **zone_acwr(acwr), "jours_historique": int(len(serie)),
     }
+
+
+def zone_acwr(acwr: float) -> dict:
+    """Zone de risque d'un ACWR déjà calculé (seuils de Gabbett, voir calculer_acwr)."""
+    if acwr < 0.8:
+        return {"zone": "Sous-charge", "couleur": "#5B9BB0"}
+    if acwr <= 1.3:
+        return {"zone": "Zone optimale", "couleur": "#1F7A52"}
+    if acwr <= 1.5:
+        return {"zone": "Prudence", "couleur": "#B26B00"}
+    return {"zone": "Risque élevé", "couleur": "#C0283D"}
 
 
 def calculer_bmr_tdee(sexe: str, poids_kg: float, taille_cm: float, age: int,
@@ -87,6 +88,24 @@ def moteur_de_decision(vitals: dict, acwr_info: dict, bilan_calorique: dict,
         alertes.append(("Attention", "Hypoglycémie détectée",
                          "Apport glucidique rapide recommandé."))
 
+    alertes += alertes_charge_nutrition(acwr_info, bilan_calorique)
+
+    for _, ligne in df_micro.iterrows():
+        if ligne["Valeur mesurée"] < ligne["Seuil minimal"]:
+            alertes.append(("Attention", f"Carence détectée : {ligne['Micronutriment']}",
+                             "Ajustement diététique ou supplémentation à discuter avec un professionnel."))
+
+    if not alertes:
+        alertes.append(("OK", "Aucune anomalie détectée", "L'athlète est dans les paramètres normaux."))
+
+    priorite = {"Critique": 0, "Attention": 1, "Info": 2, "OK": 3}
+    alertes.sort(key=lambda a: priorite[a[0]])
+    return alertes
+
+
+def alertes_charge_nutrition(acwr_info: dict, bilan_calorique: dict) -> list:
+    """Alertes de charge (zone ACWR) et de nutrition, sans constantes vitales ni micronutriments."""
+    alertes = []
     if acwr_info["zone"] == "Risque élevé":
         alertes.append(("Critique", f"ACWR élevé ({acwr_info['acwr']})",
                          "Risque de blessure accru : réduire la charge cette semaine."))
@@ -107,27 +126,18 @@ def moteur_de_decision(vitals: dict, acwr_info: dict, bilan_calorique: dict,
         elif ecart > 0.25:
             alertes.append(("Info", "Surplus calorique important (> 25%)",
                              "Réévaluer les apports par rapport à l'objectif de performance."))
-
-    for _, ligne in df_micro.iterrows():
-        if ligne["Valeur mesurée"] < ligne["Seuil minimal"]:
-            alertes.append(("Attention", f"Carence détectée : {ligne['Micronutriment']}",
-                             "Ajustement diététique ou supplémentation à discuter avec un professionnel."))
-
-    if not alertes:
-        alertes.append(("OK", "Aucune anomalie détectée", "L'athlète est dans les paramètres normaux."))
-
-    priorite = {"Critique": 0, "Attention": 1, "Info": 2, "OK": 3}
-    alertes.sort(key=lambda a: priorite[a[0]])
     return alertes
 
 
 def calculer_performance_score(acwr_info: dict, injury_risk_pct: float,
                                 fatigue_score: float, bilan_calorique: dict,
-                                regularite_pct: float) -> dict:
+                                regularite_pct: float | None) -> dict:
     """
     Athlete Performance Score (0-100), agrégation pondérée de 5 dimensions :
     condition physique, charge, récupération, nutrition, régularité.
     Retourne le score global + le détail par dimension (pour le radar chart).
+    `regularite_pct=None` (régularité inconnue, ex. une ligne de CSV) : la dimension est
+    retirée du calcul au lieu d'être inventée.
     """
     # Condition physique : pénalisée par le risque de blessure ML
     condition_physique = max(0, 100 - injury_risk_pct)
@@ -146,15 +156,14 @@ def calculer_performance_score(acwr_info: dict, injury_risk_pct: float,
     else:
         nutrition = 70
 
-    regularite = max(0, min(100, regularite_pct))
-
     dimensions = {
         "Condition physique": round(condition_physique, 1),
         "Charge d'entraînement": round(charge, 1),
         "Récupération": round(recuperation, 1),
         "Nutrition": round(nutrition, 1),
-        "Régularité": round(regularite, 1),
     }
+    if regularite_pct is not None:
+        dimensions["Régularité"] = round(max(0, min(100, regularite_pct)), 1)
 
     score_global = round(sum(dimensions.values()) / len(dimensions), 1)
 

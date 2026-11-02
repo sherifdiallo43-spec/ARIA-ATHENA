@@ -105,3 +105,28 @@ def recommander_leviers(features) -> dict:
     plan = simuler_scenario(features, combine) if combine else {
         "avant_pct": round(avant, 1), "apres_pct": round(avant, 1), "gain_pts": 0.0}
     return {"leviers": gains, "plan_combine": plan}
+
+
+def analyser_lot(Xn: np.ndarray) -> dict:
+    """Version groupée d'expliquer_prediction et de recommander_leviers pour tout un fichier.
+
+    `Xn` est déjà nettoyé (models.testeur_csv.nettoyer_matrice). Mêmes substitutions que la version
+    individuelle, mais une seule prédiction par facteur pour toutes les lignes : rapide sur 3 000 athlètes.
+    Retourne le score (pts), la contribution de chaque facteur et le gain de chaque levier (0 si négligeable).
+    """
+    clf, _, _ = _charger_modeles()
+    risque = clf.predict_proba(Xn)[:, 1] * 100
+    contributions = {}
+    for nom, ref in REFERENCE_SAINE.items():
+        alt = Xn.copy()
+        alt[:, FEATURE_NAMES.index(nom)] = ref
+        contributions[nom] = risque - clf.predict_proba(alt)[:, 1] * 100
+    gains = {}
+    for nom, (cible, _) in LEVIERS.items():
+        j = FEATURE_NAMES.index(nom)
+        nouvelles = np.array([cible(v) for v in Xn[:, j]], dtype=float)
+        alt = Xn.copy()
+        alt[:, j] = nouvelles
+        gain = risque - clf.predict_proba(alt)[:, 1] * 100
+        gains[nom] = np.where((np.abs(nouvelles - Xn[:, j]) >= 1e-6) & (gain > 0.2), gain, 0.0)
+    return {"risque_pct": risque, "contributions": contributions, "gains_leviers": gains}

@@ -214,6 +214,80 @@ def test_rapport_console_windows():
     print("[OK] rapport affiché sans erreur sur une console Windows (cp1252)")
 
 
+def test_reponses_par_athlete():
+    from .explicabilite import analyser_lot, expliquer_prediction, recommander_leviers
+    d = _tmp()
+    chemin = T.jeu_de_repetition(d, n=400, graine=77)
+    res = T.analyser(chemin, n_boot=50)
+    L, pa, s = res["_lisible"], res["par_athlete"], res["production"]["seuil_0_5"]
+    assert len(L) == 400 and pa["colonne_identifiant"] == "player_id" and L["Athlète"].str.startswith("P").all()
+    assert (L["Blessure prédite"] == "Oui").sum() == pa["blessures_predites"] == s["signales"]
+    r = pa["resultats"]
+    tp = r["Correct : blessure repérée"]
+    assert abs(tp / (tp + r["Fausse alerte"]) - s["precision"]) < 1e-3, (r, s)
+    assert abs(tp / (tp + r["Blessure manquée"]) - s["rappel"]) < 1e-3, (r, s)
+    assert sum(r.values()) == 400
+
+    # La version groupée donne les mêmes contributions et le même premier levier que la version individuelle.
+    Xn, _ = T.nettoyer_matrice(res["_X"])
+    lot = analyser_lot(Xn)
+    for i in np.random.default_rng(0).choice(400, 5, replace=False):
+        for e in expliquer_prediction(Xn[i:i + 1], top=9):
+            assert abs(lot["contributions"][e["cle"]][i] - e["contribution_pts"]) <= 0.1, (i, e)
+        leviers = recommander_leviers(Xn[i:i + 1])["leviers"]
+        if leviers:
+            meilleur = max(lot["gains_leviers"], key=lambda k: lot["gains_leviers"][k][i])
+            assert meilleur == leviers[0]["cle"] and L.at[i, "Action prioritaire"].startswith(
+                T.LEVIERS[meilleur][1]), (i, leviers[0], L.at[i, "Action prioritaire"])
+
+    # Fichier Excel français : « ; », virgule décimale, accents intacts.
+    dossier = T.ecrire_sorties(res, d)
+    relu = pd.read_csv(dossier / "resultats_par_athlete.csv", sep=";", decimal=",", encoding="utf-8-sig")
+    assert len(relu) == 400 and "Blessure prédite" in relu.columns and "Résultat" in relu.columns
+    assert relu["Score de risque (/100)"].dtype.kind == "f"
+
+    # Sans colonne de blessure : réponses par athlète quand même, sans vérité ni résultat.
+    df = pd.read_csv(chemin, sep=";", decimal=",").drop(columns=["Injured"])
+    df.to_csv(d / "sans_etiquette.csv", index=False)
+    res2 = T.analyser(d / "sans_etiquette.csv", n_boot=20)
+    assert "Résultat" not in res2["_lisible"].columns and "resultats" not in res2["par_athlete"]
+    print(f"[OK] réponses par athlète : {pa['blessures_predites']}/400 prédits, comptes = précision/rappel du rapport, "
+          "version groupée = version individuelle, CSV Excel relu")
+
+
+def test_fiche_athlete():
+    from analytics.fiche_athlete import construire_fiche, generer_pdf_fiche
+    d = _tmp()
+    res = T.analyser(T.jeu_de_repetition(d, n=300, graine=78), n_boot=20)
+    L = res["_lisible"]
+    i = int(L["Score de risque (/100)"].idxmax())
+    f = construire_fiche(res["_X"][i], L.at[i, "Athlète"], blessure_reelle=L.at[i, "Blessure réelle"] == "Oui")
+    assert f["profil_risque"]["injury_risk_pct"] == L.at[i, "Score de risque (/100)"]
+    assert f["profil_risque"]["probabilite_prevalence_pct"] == L.at[i, "Probabilité estimée (%)"]
+    assert f["verite"]["resultat"] == L.at[i, "Résultat"]
+    assert f["plan_action"]["plan_combine"]["proba_avant_pct"] == f["profil_risque"]["probabilite_prevalence_pct"]
+    assert "Régularité" not in f["performance"]["dimensions"]
+
+    x = res["_X"][i].copy()
+    x[FEATURE_NAMES.index("sommeil_h")] = np.nan
+    f2 = construire_fiche(x, "Sommeil absent")
+    assert any(c["champ"] == "sommeil_h" for c in f2["qualite"]["champs_imputes"]) and f2["verite"] is None
+    assert generer_pdf_fiche(f).startswith(b"%PDF")
+    print(f"[OK] fiche athlète : mêmes chiffres que le tableau ({f['profil_risque']['injury_risk_pct']} / 100), "
+          "valeur absente signalée, PDF généré")
+
+
+def test_zone_acwr_et_performance_sans_regularite():
+    from analytics.metrics import calculer_performance_score, zone_acwr
+    assert [zone_acwr(a)["zone"] for a in (0.7, 1.0, 1.4, 1.6)] == \
+        ["Sous-charge", "Zone optimale", "Prudence", "Risque élevé"]
+    bilan = {"tdee": 1.0, "kcal_consommees": 1.0, "renseigne": True}
+    sans = calculer_performance_score({"acwr": 1.0}, 20, 3, bilan, None)
+    avec = calculer_performance_score({"acwr": 1.0}, 20, 3, bilan, 70.0)
+    assert "Régularité" not in sans["dimensions"] and len(avec["dimensions"]) == 5
+    print("[OK] zones ACWR et score de performance sans régularité inventée")
+
+
 if __name__ == "__main__":
     for nom, f in list(globals().items()):
         if nom.startswith("test_"):
